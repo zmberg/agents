@@ -148,6 +148,7 @@ func InitTracerProvider(ctx context.Context, cfg Config) (func(context.Context) 
 	// Create resource with service attributes.
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
+			// review: serviceName 和 serviceVersion 应该通过 ENV 来获取。这些ENV可以通过 deployment 来获取的。
 			semconv.ServiceName(cfg.ServiceName),
 			semconv.ServiceVersion("0.1.0"),
 		),

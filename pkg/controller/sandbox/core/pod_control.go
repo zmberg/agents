@@ -131,6 +131,7 @@ func (c *PodControl) CreatePod(ctx context.Context, args CreatePodArgs) (*corev1
 	// Trace the pod creation as a child span; the pod name attribute is set
 	// after Create since generateName is only resolved by the API server.
 	ctx, span := tracing.StartChildSpan(ctx, tracing.SpanControllerCreatePod)
+	// review: 这里直接span结束了，但其实创建有可能是成功或者失败，span应该有参数可以设置成功或者失败
 	defer span.End()
 	err = c.Create(ctx, pod)
 	if pod.Name != "" {

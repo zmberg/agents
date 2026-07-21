@@ -36,6 +36,7 @@ type annotationCarrier struct {
 // The standard W3C "traceparent" key is mapped to TraceContextAnnotationKey
 // so that the annotation key follows Kubernetes naming conventions.
 func (c *annotationCarrier) Get(key string) string {
+	// review: traceparent 定义常量
 	if key == "traceparent" {
 		return c.annotations[TraceContextAnnotationKey]
 	}
