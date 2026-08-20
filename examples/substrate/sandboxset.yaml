@@ -1,0 +1,46 @@
+# SandboxSet backed by the Substrate WorkerPool.
+#
+# With the substrate backend a SandboxSet declares capacity only: it materializes
+# a Substrate WorkerPool and nothing else. Actor templates come from the E2B
+# template build API (see build_template.py) and individual actors are created
+# on demand through the E2B create API. No Sandbox CR is ever created.
+#
+# The first container's image is the ateom worker image and its resources become
+# the per-worker pod resources. The three substrate annotations carry backend
+# policy that a PodSpec cannot express.
+apiVersion: agents.kruise.io/v1alpha1
+kind: SandboxSet
+metadata:
+  name: counter
+  namespace: ate-demo-counter
+  annotations:
+    # Route this SandboxSet to the Substrate backend instead of Sandbox CRs.
+    agents.kruise.io/backend: substrate
+    # Runtime family for the worker pool: gvisor or microvm.
+    substrate.agents.kruise.io/sandbox-class: gvisor
+    # How idle actors hibernate: "suspend" frees the worker (external snapshot),
+    # "pause" keeps the worker (local snapshot).
+    substrate.agents.kruise.io/hibernate-mode: suspend
+spec:
+  # 1:1 with WorkerPool.spec.replicas — the number of worker pods.
+  replicas: 5
+  template:
+    spec:
+      containers:
+        # The first (and only) container is the ateom worker. Its image must be
+        # pinned by digest, and its resources become the per-worker pod shape.
+        - name: ateom
+          image: >-
+            yuxi-registry.cn-shanghai.cr.aliyuncs.com/substrate/ateom-gvisor-715889664656de67e44382a8d6ab981d@sha256:5917d2049bc1cf6029855e79ed7d60dc0eb004e9e49ee20f02776ae5d2a633ef
+          resources:
+            requests:
+              cpu: "4"
+              memory: 8Gi
+            limits:
+              cpu: "8"
+              memory: 16Gi
+      # Optional scheduling settings are projected onto the worker pod template.
+      # Only nodeSelector, tolerations, priorityClassName and nodeAffinity are
+      # supported; pod (anti-)affinity is rejected at reconcile.
+      nodeSelector:
+        node.kubernetes.io/instance-type: ecs.g7.4xlarge

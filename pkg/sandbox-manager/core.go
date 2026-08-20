@@ -24,9 +24,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"k8s.io/apimachinery/pkg/api/validate/content"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	infracache "github.com/openkruise/agents/pkg/cache"
 	"github.com/openkruise/agents/pkg/peers"
 	"github.com/openkruise/agents/pkg/proxy"
@@ -35,11 +38,20 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
+	"github.com/openkruise/agents/pkg/sandbox-manager/infra/substrate"
 	"github.com/openkruise/agents/pkg/sandbox-manager/quota"
 	quotaspec "github.com/openkruise/agents/pkg/sandbox-manager/quota/spec"
 	"github.com/openkruise/agents/pkg/sandboxid"
-	"github.com/openkruise/agents/pkg/utils/runtime"
+	runtimeutil "github.com/openkruise/agents/pkg/utils/runtime"
 )
+
+// substrateScheme knows the Substrate CRDs so the template-resolver client can
+// read ActorTemplates. It is built once at package load.
+var substrateScheme = func() *runtime.Scheme {
+	scheme := runtime.NewScheme()
+	utilruntime.Must(atev1alpha1.AddToScheme(scheme))
+	return scheme
+}()
 
 // QuotaEnforcer is the minimal surface sandbox-manager needs for admission, delete release, and cleanup.
 // InitQuota wires the production implementation.
@@ -71,7 +83,7 @@ type SandboxManagerBuilder struct {
 	// config.SandboxManagerOptions (which the cache layer imports) and handed to
 	// the sandbox infra so claim/clone post-processing can resolve the
 	// per-sandbox runtime transport. Nil disables runtime TLS.
-	runtimeTLSBundle *runtime.TLSBundle
+	runtimeTLSBundle *runtimeutil.TLSBundle
 }
 
 func NewSandboxManagerBuilder(opts config.SandboxManagerOptions) *SandboxManagerBuilder {
@@ -112,13 +124,50 @@ func (b *SandboxManagerBuilder) WithSandboxInfra() *SandboxManagerBuilder {
 // agent-runtimes. It may be called in any order relative to WithSandboxInfra
 // because the infra builder is materialized lazily at Build time. A nil bundle
 // (the default) keeps every runtime call on the legacy plaintext paths.
-func (b *SandboxManagerBuilder) WithRuntimeTLSBundle(bundle *runtime.TLSBundle) *SandboxManagerBuilder {
+func (b *SandboxManagerBuilder) WithRuntimeTLSBundle(bundle *runtimeutil.TLSBundle) *SandboxManagerBuilder {
 	b.runtimeTLSBundle = bundle
 	return b
 }
 
+// WithCustomInfra sets an explicit infra builder factory.
 func (b *SandboxManagerBuilder) WithCustomInfra(builderFunc GetInfraBuilderFunc) *SandboxManagerBuilder {
 	b.buildInfraFunc = builderFunc
+	return b
+}
+
+// SubstrateOptions configures the Substrate backend.
+type SubstrateOptions struct {
+	// Address is the Substrate control gRPC address. An "insecure://" prefix
+	// dials in plaintext; otherwise TLS is used and CAFile is required.
+	Address string
+	// CAFile is the PEM bundle verifying the Substrate server certificate.
+	CAFile string
+	// DefaultHibernateMode applies when a claim resolves no pool-specific mode.
+	DefaultHibernateMode string
+}
+
+// WithSubstrateInfra configures the Substrate backend. The template resolver
+// reads ActorTemplates through a direct client built from RestConfig, since the
+// substrate infra keeps no informer cache of its own.
+func (b *SandboxManagerBuilder) WithSubstrateInfra(sopts SubstrateOptions) *SandboxManagerBuilder {
+	b.buildInfraFunc = func() (infra.Builder, error) {
+		substrateClient, err := substrate.NewClient(sopts.Address, sopts.CAFile)
+		if err != nil {
+			return nil, err
+		}
+		reader, err := client.New(b.opts.RestConfig, client.Options{Scheme: substrateScheme})
+		if err != nil {
+			return nil, fmt.Errorf("create client for substrate template resolver: %w", err)
+		}
+		sb := substrate.NewInfraBuilder().
+			WithControlClient(substrateClient).
+			WithTemplateReader(reader).
+			WithDefaultHibernateMode(sopts.DefaultHibernateMode)
+		if err := sb.Validate(); err != nil {
+			return nil, err
+		}
+		return sb, nil
+	}
 	return b
 }
 
@@ -188,8 +237,9 @@ func (b *SandboxManagerBuilder) Build() (*SandboxManager, error) {
 	}
 	b.instance.routeSource = routeSource
 
-	// Build peers manager
-	if b.getPeersFunc != nil {
+	// Build peers manager. It needs an informer-backed API reader, which a
+	// cacheless backend (e.g. substrate) does not have; skip it there.
+	if b.getPeersFunc != nil && b.instance.infra.GetCache() != nil {
 		reader := b.instance.infra.GetCache().GetAPIReader()
 		peersManager, err := b.getPeersFunc(NewPeerArgs{apiReader: reader})
 		if err != nil {

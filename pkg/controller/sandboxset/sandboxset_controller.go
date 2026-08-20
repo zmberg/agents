@@ -42,6 +42,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/discovery"
 	"github.com/openkruise/agents/pkg/features"
@@ -98,6 +99,7 @@ const (
 // +kubebuilder:rbac:groups=agents.kruise.io,resources=sandboxsets/finalizers,verbs=update
 // +kubebuilder:rbac:groups=agents.kruise.io,resources=sandboxtemplates,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch
+// +kubebuilder:rbac:groups=ate.dev,resources=workerpools,verbs=get;list;watch;create;update;patch;delete
 
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	totalStart := time.Now()
@@ -116,6 +118,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	recordSandboxSetMetrics(sbs)
+
+	// A substrate-backed SandboxSet only declares capacity. It never owns
+	// Sandbox CRs, so it must short-circuit before the pool bookkeeping below.
+	if IsSubstrateBackend(sbs.Annotations) {
+		if err := r.reconcileSubstrate(ctx, sbs); err != nil {
+			log.Error(err, "failed to reconcile substrate capacity")
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
 
 	// Preparation
 	result, err := r.initNewStatus(ctx, sbs)
@@ -512,6 +524,9 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&agentsv1alpha1.SandboxSet{}, &handler.EnqueueRequestForObject{}).
 		Watches(&agentsv1alpha1.Sandbox{}, &SandboxEventHandler{}).
 		Watches(&agentsv1alpha1.SandboxTemplate{},
+			handler.EnqueueRequestForOwner(mgr.GetScheme(), mgr.GetRESTMapper(),
+				&agentsv1alpha1.SandboxSet{}, handler.OnlyControllerOwner())).
+		Watches(&atev1alpha1.WorkerPool{},
 			handler.EnqueueRequestForOwner(mgr.GetScheme(), mgr.GetRESTMapper(),
 				&agentsv1alpha1.SandboxSet{}, handler.OnlyControllerOwner())).
 		Complete(r)

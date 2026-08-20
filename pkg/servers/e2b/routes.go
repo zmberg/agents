@@ -65,6 +65,7 @@ func (sc *Controller) registerRoutes() {
 	RegisterE2BRoute(sc.mux, http.MethodGet, "/templates", sc.ListTemplates, sc.CheckApiKey)
 	RegisterE2BRoute(sc.mux, http.MethodGet, "/templates/{templateID}", sc.GetTemplate, sc.CheckApiKey)
 	RegisterE2BRoute(sc.mux, http.MethodDelete, "/templates/{templateID}", sc.DeleteTemplate, sc.CheckApiKey)
+	sc.registerSubstrateRoutes()
 	RegisterE2BRoute(sc.mux, http.MethodGet, "/browser/{sandboxID}/json/version", sc.BrowserUse, sc.CheckApiKey)
 	RegisterE2BRoute(sc.mux, http.MethodGet, "/debug", sc.Debug, sc.CheckApiKey)
 

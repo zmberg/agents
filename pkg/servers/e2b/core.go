@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/openkruise/agents/pkg/agent-runtime/storages"
 	"github.com/openkruise/agents/pkg/cache"
@@ -65,6 +66,37 @@ type Controller struct {
 	adapter         *adapters.E2BAdapter
 	manager         *sandboxmanager.SandboxManager
 	keys            keys.KeyStorage
+
+	// substrate holds the Substrate backend configuration. It is nil unless the
+	// substrate backend is enabled, in which case buildTemplate routes are
+	// registered and ActorTemplates are created through substrateClient.
+	substrate       *SubstrateConfig
+	substrateClient client.Client
+}
+
+// SubstrateConfig carries the deployment-level inputs the E2B template build
+// API needs to materialize an ActorTemplate, which the E2B protocol itself does
+// not supply.
+type SubstrateConfig struct {
+	// Address is the Substrate control gRPC address; a non-empty value enables
+	// the substrate backend.
+	Address string
+	// CAFile verifies the Substrate server certificate for TLS addresses.
+	CAFile string
+	// PauseImage is the pinned pause container image for generated ActorTemplates.
+	PauseImage string
+	// SnapshotsLocationBase is the root snapshot location; the per-template
+	// location is this joined with the team namespace.
+	SnapshotsLocationBase string
+	// SandboxClass selects the runtime family for generated ActorTemplates.
+	SandboxClass string
+	// DefaultHibernateMode is the fallback hibernate mode for claims.
+	DefaultHibernateMode string
+}
+
+// Enabled reports whether the substrate backend is configured.
+func (c *SubstrateConfig) Enabled() bool {
+	return c != nil && c.Address != ""
 }
 
 // ControllerOptions carries everything NewController needs. Passing a struct
@@ -90,6 +122,9 @@ type ControllerOptions struct {
 	// agent-runtimes during claim and clone post-processing. Nil keeps every
 	// runtime call on the legacy plaintext paths.
 	RuntimeTLSBundle *utilruntime.TLSBundle
+	// Substrate enables and configures the Substrate backend. Nil or an empty
+	// Address keeps the default Sandbox CR backend.
+	Substrate *SubstrateConfig
 }
 
 // NewController creates a new E2B Controller from opts.
@@ -103,6 +138,7 @@ func NewController(opts ControllerOptions) *Controller {
 		keyCfg:                opts.KeyConfig,
 		mgrOpts:               opts.Manager,
 		runtimeTLSBundle:      opts.RuntimeTLSBundle,
+		substrate:             opts.Substrate,
 	}
 
 	sc.server = &http.Server{
@@ -119,13 +155,23 @@ func (sc *Controller) Init() error {
 	log := klog.FromContext(ctx)
 	log.Info("init controller")
 
-	sandboxManager, err := sandboxmanager.NewSandboxManagerBuilder(sc.mgrOpts).
-		WithSandboxInfra().
+	builder := sandboxmanager.NewSandboxManagerBuilder(sc.mgrOpts).
 		WithMemberlistPeers().
 		WithRequestAdapter(sc.adapter).
-		WithRuntimeTLSBundle(sc.runtimeTLSBundle).
-		Build()
+		WithRuntimeTLSBundle(sc.runtimeTLSBundle)
 
+	if sc.substrate.Enabled() {
+		log.Info("using substrate backend", "address", sc.substrate.Address)
+		builder = builder.WithSubstrateInfra(sandboxmanager.SubstrateOptions{
+			Address:              sc.substrate.Address,
+			CAFile:               sc.substrate.CAFile,
+			DefaultHibernateMode: sc.substrate.DefaultHibernateMode,
+		})
+	} else {
+		builder = builder.WithSandboxInfra()
+	}
+
+	sandboxManager, err := builder.Build()
 	if err != nil {
 		return err
 	}
@@ -133,6 +179,17 @@ func (sc *Controller) Init() error {
 	sc.manager = sandboxManager
 	sc.cache = sandboxManager.GetInfra().GetCache()
 	sc.storageRegistry = storages.NewStorageProvider()
+
+	// The substrate backend keeps no informer cache, so buildTemplate handlers
+	// need their own client to create and read ActorTemplates.
+	if sc.substrate.Enabled() {
+		templateClient, err := client.New(sc.mgrOpts.RestConfig, client.Options{Scheme: substrateScheme})
+		if err != nil {
+			return fmt.Errorf("create substrate ActorTemplate client: %w", err)
+		}
+		sc.substrateClient = templateClient
+	}
+
 	sc.registerRoutes()
 
 	if err := sc.initKeyStorage(ctx); err != nil {

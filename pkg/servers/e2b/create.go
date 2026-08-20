@@ -422,6 +422,13 @@ func (sc *Controller) basicSandboxCreateModifier(ctx context.Context, sbx infra.
 	for k, v := range request.Metadata {
 		annotations[k] = v
 	}
+	// Re-inject the parsed pool-selection extension as an annotation so the
+	// substrate backend can read it during claim. It was stripped from Metadata
+	// during extension parsing, and the E2B prefix is blacklisted for raw
+	// metadata, so the system sets it here rather than the caller.
+	if request.Extensions.SandboxSet != "" {
+		annotations[models.ExtensionKeySandboxSet] = request.Extensions.SandboxSet
+	}
 	if request.Extensions.ReturnPodIP {
 		annotations[models.ExtensionKeyReturnPodIP] = agentsv1alpha1.True
 	}

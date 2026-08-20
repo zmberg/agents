@@ -63,3 +63,74 @@ type Build struct {
 	DiskSizeMB  int       `json:"diskSizeMB"`
 	EnvdVersion string    `json:"envdVersion"`
 }
+
+// TemplateBuildRequest is the body of POST /v3/templates (and the deprecated
+// alias/teamID form). It reserves a template identity and a build slot; the
+// build content is submitted separately to the start endpoint.
+type TemplateBuildRequest struct {
+	// Name is the template name. It may carry a "name:tag" suffix.
+	Name string `json:"name"`
+	// Alias is the deprecated predecessor of Name; accepted for older SDKs.
+	Alias    string `json:"alias"`
+	CPUCount int    `json:"cpuCount"`
+	MemoryMB int    `json:"memoryMB"`
+}
+
+// TemplateName returns the effective template name, preferring Name and falling
+// back to the deprecated Alias. Any tag suffix on Name is stripped.
+func (r TemplateBuildRequest) TemplateName() string {
+	name := r.Name
+	if name == "" {
+		name = r.Alias
+	}
+	if idx := indexByte(name, ':'); idx >= 0 {
+		name = name[:idx]
+	}
+	return name
+}
+
+// TemplateRequestResponse is the 202 body returned when a build is requested.
+type TemplateRequestResponse struct {
+	TemplateID string   `json:"templateID"`
+	BuildID    string   `json:"buildID"`
+	Aliases    []string `json:"aliases,omitempty"`
+}
+
+// TemplateStep is one step in an E2B build (RUN, COPY, ...). The substrate
+// backend does not run a build pipeline, so only base-image forms are honored
+// and any steps are rejected.
+type TemplateStep struct {
+	Type      string   `json:"type"`
+	Args      []string `json:"args"`
+	FilesHash string   `json:"filesHash"`
+	Force     bool     `json:"force"`
+}
+
+// TemplateBuildStart is the body of POST /v2/templates/{id}/builds/{buildID}.
+// It carries the actual build definition.
+type TemplateBuildStart struct {
+	FromImage    string         `json:"fromImage"`
+	FromTemplate string         `json:"fromTemplate"`
+	Force        bool           `json:"force"`
+	Steps        []TemplateStep `json:"steps"`
+	StartCmd     string         `json:"startCmd"`
+	ReadyCmd     string         `json:"readyCmd"`
+}
+
+// TemplateBuildInfo is the body of GET /templates/{id}/builds/{buildID}/status.
+type TemplateBuildInfo struct {
+	TemplateID string   `json:"templateID"`
+	BuildID    string   `json:"buildID"`
+	Status     string   `json:"status"`
+	Logs       []string `json:"logs"`
+}
+
+// indexByte returns the index of the first occurrence of c in s, or -1.
+func indexByte(s string, c byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == c {
+			return i
+		}
+	}
+	return -1
+}

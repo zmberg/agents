@@ -96,6 +96,10 @@ type NewSandboxRequestExtension struct {
 	Labels                       map[string]string
 	Name                         string
 	GenerateName                 string
+	// SandboxSet pins the sandbox to a specific SandboxSet's worker pool on the
+	// substrate backend. Empty leaves placement unconstrained. It is ignored by
+	// the default Sandbox CR backend.
+	SandboxSet string
 }
 
 type InplaceUpdateExtension struct {

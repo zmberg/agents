@@ -39,7 +39,7 @@ func TestCache_SandboxInformerHealthyHealth(t *testing.T) {
 	health.MarkSynced()
 	assert.True(t, c.SandboxInformerHealthy())
 
-	health.RecordWatchError(nil, errors.New("watch failed"))
+	health.RecordWatchError(t.Context(), nil, errors.New("watch failed"))
 	assert.False(t, c.SandboxInformerHealthy(), "a fresh watch error disables health during the settle window")
 
 	health.lastWatchError.Store(time.Now().Add(-time.Hour).UnixNano())
@@ -193,10 +193,32 @@ func (i *testSandboxInformer) RemoveEventHandler(toolscache.ResourceEventHandler
 	return i.removeErr
 }
 
+// testDoneChecker satisfies toolscache.DoneChecker for the registration stubs
+// below. Done reflects the stub's synced state so the checker never reports a
+// sync the stub itself does not claim.
+type testDoneChecker struct {
+	name   string
+	synced bool
+}
+
+func (c testDoneChecker) Name() string { return c.name }
+
+func (c testDoneChecker) Done() <-chan struct{} {
+	ch := make(chan struct{})
+	if c.synced {
+		close(ch)
+	}
+	return ch
+}
+
 type syncedTestHandle struct{}
 
 func (syncedTestHandle) HasSynced() bool {
 	return true
+}
+
+func (syncedTestHandle) HasSyncedChecker() toolscache.DoneChecker {
+	return testDoneChecker{name: "syncedTestHandle", synced: true}
 }
 
 type fakeSandboxEventRegistration struct {
@@ -206,6 +228,10 @@ type fakeSandboxEventRegistration struct {
 
 func (r *fakeSandboxEventRegistration) HasSynced() bool {
 	return r.synced
+}
+
+func (r *fakeSandboxEventRegistration) HasSyncedChecker() toolscache.DoneChecker {
+	return testDoneChecker{name: "fakeSandboxEventRegistration", synced: r.synced}
 }
 
 func (r *fakeSandboxEventRegistration) Remove() error {

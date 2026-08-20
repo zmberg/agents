@@ -104,6 +104,12 @@ func main() {
 	var quotaAntiDriftInterval time.Duration
 	var quotaAntiDriftGrace time.Duration
 	var runtimeClientCertSecret string
+	var substrateAddr string
+	var substrateCAFile string
+	var substratePauseImage string
+	var substrateSnapshotsLocation string
+	var substrateSandboxClass string
+	var substrateHibernateMode string
 
 	utilfeature.DefaultMutableFeatureGate.AddFlag(pflag.CommandLine)
 
@@ -156,6 +162,22 @@ func main() {
 	pflag.DurationVar(&quotaAntiDriftGrace, "quota-anti-drift-grace", consts.DefaultQuotaAntiDriftGrace, "Grace period before periodic quota anti-drift releases suspected leaked entries.")
 	pflag.StringVar(&runtimeClientCertSecret, "runtime-client-cert-secret", "",
 		"namespace/name of the Secret holding the agent-runtime client TLS bundle. Leave it empty to disable the runtime mTLS.")
+
+	// Substrate backend flags. Setting --substrate-addr switches the sandbox
+	// backend from Sandbox CRs to Substrate actors.
+	pflag.StringVar(&substrateAddr, "substrate-addr", "",
+		"Substrate control gRPC address (e.g. substrate-api:50051). When set, uses Substrate as the sandbox backend. "+
+			"Prefix with insecure:// to dial in plaintext.")
+	pflag.StringVar(&substrateCAFile, "substrate-ca-file", "",
+		"PEM CA bundle verifying the Substrate control server certificate. Required for TLS addresses.")
+	pflag.StringVar(&substratePauseImage, "substrate-pause-image", "",
+		"Pinned pause container image used for ActorTemplates created through the E2B build API.")
+	pflag.StringVar(&substrateSnapshotsLocation, "substrate-snapshots-location", "",
+		"Base snapshot location for ActorTemplates; the per-template location appends the team namespace.")
+	pflag.StringVar(&substrateSandboxClass, "substrate-sandbox-class", "gvisor",
+		"Sandbox runtime family for ActorTemplates created through the E2B build API (gvisor or microvm).")
+	pflag.StringVar(&substrateHibernateMode, "substrate-hibernate-mode", "suspend",
+		"Default hibernate mode for substrate actors when a SandboxSet does not specify one (pause or suspend).")
 
 	// Tracing flags (definitions shared with agent-sandbox-controller via
 	// tracing.Config.BindFlags; pulled into pflag by AddGoFlagSet below)
@@ -312,6 +334,20 @@ func main() {
 		}
 	}
 
+	// Substrate backend config. Nil unless --substrate-addr is set, in which
+	// case the E2B controller uses the Substrate backend instead of Sandbox CRs.
+	var substrateConfig *e2b.SubstrateConfig
+	if substrateAddr != "" {
+		substrateConfig = &e2b.SubstrateConfig{
+			Address:               substrateAddr,
+			CAFile:                substrateCAFile,
+			PauseImage:            substratePauseImage,
+			SnapshotsLocationBase: substrateSnapshotsLocation,
+			SandboxClass:          substrateSandboxClass,
+			DefaultHibernateMode:  substrateHibernateMode,
+		}
+	}
+
 	sandboxController := e2b.NewController(e2b.ControllerOptions{
 		Domain:           domain,
 		Port:             port,
@@ -333,6 +369,7 @@ func main() {
 			Quota:                 quotaOpts,
 		},
 		RuntimeTLSBundle: runtimeTLSBundle,
+		Substrate:        substrateConfig,
 	})
 
 	if err := sandboxController.Init(); err != nil {

@@ -19,6 +19,32 @@ package v1alpha1
 const (
 	InternalPrefix = "agents.kruise.io/"
 
+	// AnnotationBackend selects the backend that materializes a SandboxSet.
+	// Absent or any unknown value keeps the default Sandbox CR backend.
+	AnnotationBackend = InternalPrefix + "backend"
+
+	// BackendSubstrate routes a SandboxSet to the Substrate WorkerPool backend.
+	BackendSubstrate = "substrate"
+
+	// SubstratePrefix namespaces the annotations that only apply to the Substrate
+	// backend.
+	SubstratePrefix = "substrate.agents.kruise.io/"
+
+	// AnnotationSubstrateSandboxClass selects the Substrate sandbox runtime family
+	// ("gvisor" or "microvm"). A PodSpec has no equivalent field, so it stays an
+	// annotation; empty defers to the backend default.
+	AnnotationSubstrateSandboxClass = SubstratePrefix + "sandbox-class"
+
+	// AnnotationSubstrateHibernateMode selects how sandbox-manager hibernates the
+	// actors of a pool: "pause" keeps the worker and snapshots locally, "suspend"
+	// frees the worker through an external snapshot.
+	AnnotationSubstrateHibernateMode = SubstratePrefix + "hibernate-mode"
+
+	// HibernateModePause keeps the worker assigned while the sandbox sleeps.
+	HibernateModePause = "pause"
+	// HibernateModeSuspend frees the worker while the sandbox sleeps.
+	HibernateModeSuspend = "suspend"
+
 	AnnotationLock               = InternalPrefix + "lock"
 	AnnotationOwner              = InternalPrefix + "owner"
 	AnnotationClaimTime          = InternalPrefix + "claim-timestamp"

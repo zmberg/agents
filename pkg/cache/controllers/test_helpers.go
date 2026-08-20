@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
@@ -42,6 +43,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/conversion"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 )
@@ -171,6 +173,8 @@ func (m *MockManager) GetRESTMapper() apimeta.RESTMapper    { return nil }
 
 func (m *MockManager) GetEventRecorderFor(_ string) record.EventRecorder { return nil }
 
+func (m *MockManager) GetEventRecorder(_ string) events.EventRecorder { return nil }
+
 // Start satisfies both cluster.Cluster and manager.Manager.
 func (m *MockManager) Start(ctx context.Context) error {
 	m.startCount.Add(1)
@@ -276,6 +280,8 @@ func (m *MockManager) AddReadyzCheck(_ string, _ healthz.Checker) error         
 
 func (m *MockManager) GetWebhookServer() webhook.Server { return nil }
 func (m *MockManager) GetLogger() logr.Logger           { return logr.Discard() }
+
+func (m *MockManager) GetConverterRegistry() conversion.Registry { return conversion.NewRegistry() }
 
 // GetControllerOptions returns a config with SkipNameValidation=true.
 // This prevents the global name registry inside controller-runtime from causing

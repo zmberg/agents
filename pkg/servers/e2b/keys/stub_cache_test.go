@@ -94,3 +94,18 @@ type stubReg struct{}
 // HasSynced satisfies toolscache.ResourceEventHandlerRegistration. Tests that
 // drive events directly never consult this; returning true is harmless.
 func (stubReg) HasSynced() bool { return true }
+
+// HasSyncedChecker satisfies toolscache.ResourceEventHandlerRegistration. Like
+// HasSynced it is never consulted by these tests, so it reports an already
+// completed sync.
+func (stubReg) HasSyncedChecker() toolscache.DoneChecker { return stubDoneChecker{} }
+
+type stubDoneChecker struct{}
+
+func (stubDoneChecker) Name() string { return "stubReg" }
+
+func (stubDoneChecker) Done() <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}

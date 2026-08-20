@@ -56,6 +56,20 @@ const (
 	// CheckpointLabelID is the checkpoint ID label key
 	CheckpointLabelID = InternalPrefix + "checkpoint-id"
 
+	// LabelSandboxSet marks a backend capacity resource with its owning
+	// SandboxSet. The SandboxSet controller writes it onto the resource it
+	// generates and sandbox-manager selects on it when placing a sandbox, so it
+	// is the contract between the capacity plane and per-sandbox placement.
+	LabelSandboxSet = InternalPrefix + "sandboxset"
+
+	// LabelE2BTemplateID groups every build artifact produced for one E2B
+	// template name. A build artifact is immutable, so each build creates a new
+	// object and this label ties those objects back to the user-facing name.
+	LabelE2BTemplateID = InternalPrefix + "e2b-template-id"
+
+	// LabelE2BBuildID identifies the single E2B build that produced an artifact.
+	LabelE2BBuildID = InternalPrefix + "e2b-build-id"
+
 	True  = "true"
 	False = "false"
 )

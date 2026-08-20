@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"github.com/openkruise/agents/pkg/utils"
@@ -50,6 +51,7 @@ func init() {
 	testScheme = runtime.NewScheme()
 	_ = v1alpha1.AddToScheme(testScheme)
 	_ = corev1.AddToScheme(testScheme)
+	_ = atev1alpha1.AddToScheme(testScheme)
 }
 
 var newPodKey = "is-new-pod"

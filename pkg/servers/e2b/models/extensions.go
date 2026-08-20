@@ -68,6 +68,10 @@ const (
 	MetadataKeySandboxResource                = v1alpha1.E2BPrefix + "sandbox-resource"
 	ExtensionKeySandboxName                   = v1alpha1.E2BPrefix + "sandbox-name"
 	ExtensionKeySandboxGenerateName           = v1alpha1.E2BPrefix + "sandbox-generate-name"
+	// ExtensionKeySandboxSet pins a substrate-backed sandbox to a SandboxSet's
+	// worker pool. It is an extension rather than a plain metadata key because
+	// the E2B prefix is otherwise blacklisted for user metadata.
+	ExtensionKeySandboxSet = v1alpha1.E2BPrefix + "sandboxset"
 )
 
 const (
@@ -124,11 +128,13 @@ func (r *NewSandboxRequest) parseCommonExtensions() error {
 	r.Extensions.CreateOnNoStock = r.Metadata[ExtensionKeyCreateOnNoStock] != v1alpha1.False
 	r.Extensions.NeverTimeout = r.Metadata[ExtensionKeyNeverTimeout] == v1alpha1.True
 	r.Extensions.ReturnPodIP = r.Metadata[ExtensionKeyReturnPodIP] == v1alpha1.True
+	r.Extensions.SandboxSet = r.Metadata[ExtensionKeySandboxSet]
 	delete(r.Metadata, ExtensionKeySkipInitRuntime)
 	delete(r.Metadata, ExtensionKeyReserveFailedSandbox)
 	delete(r.Metadata, ExtensionKeyCreateOnNoStock)
 	delete(r.Metadata, ExtensionKeyNeverTimeout)
 	delete(r.Metadata, ExtensionKeyReturnPodIP)
+	delete(r.Metadata, ExtensionKeySandboxSet)
 	if r.Extensions.TimeoutSeconds, err = r.parseAndRemoveIntExtension(ExtensionKeyClaimTimeout); err != nil {
 		return err
 	}
