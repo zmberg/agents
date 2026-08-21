@@ -96,6 +96,9 @@ type SubstrateConfig struct {
 	Address string
 	// CAFile verifies the Substrate server certificate for TLS addresses.
 	CAFile string
+	// TokenFile holds the bearer token presented to the Substrate API, which
+	// authenticates callers by Kubernetes ServiceAccount JWT.
+	TokenFile string
 	// PauseImage is the pinned pause container image for generated ActorTemplates.
 	PauseImage string
 	// SnapshotsLocationBase is the root snapshot location; the per-template
@@ -179,6 +182,7 @@ func (sc *Controller) Init() error {
 		builder = builder.WithSubstrateInfra(sandboxmanager.SubstrateOptions{
 			Address:              sc.substrate.Address,
 			CAFile:               sc.substrate.CAFile,
+			TokenFile:            sc.substrate.TokenFile,
 			DefaultHibernateMode: sc.substrate.DefaultHibernateMode,
 		})
 	} else {

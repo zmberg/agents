@@ -106,6 +106,7 @@ func main() {
 	var runtimeClientCertSecret string
 	var substrateAddr string
 	var substrateCAFile string
+	var substrateTokenFile string
 	var substratePauseImage string
 	var substrateSnapshotsLocation string
 	var substrateSandboxClass string
@@ -170,6 +171,10 @@ func main() {
 			"Prefix with insecure:// to dial in plaintext.")
 	pflag.StringVar(&substrateCAFile, "substrate-ca-file", "",
 		"PEM CA bundle verifying the Substrate control server certificate. Required for TLS addresses.")
+	pflag.StringVar(&substrateTokenFile, "substrate-token-file", "",
+		"File holding the bearer token presented to the Substrate control API, which authenticates callers by "+
+			"Kubernetes ServiceAccount JWT. Point it at a projected ServiceAccount token whose audience matches the "+
+			"Substrate API server.")
 	pflag.StringVar(&substratePauseImage, "substrate-pause-image", "",
 		"Pinned pause container image used for ActorTemplates created through the E2B build API.")
 	pflag.StringVar(&substrateSnapshotsLocation, "substrate-snapshots-location", "",
@@ -341,6 +346,7 @@ func main() {
 		substrateConfig = &e2b.SubstrateConfig{
 			Address:               substrateAddr,
 			CAFile:                substrateCAFile,
+			TokenFile:             substrateTokenFile,
 			PauseImage:            substratePauseImage,
 			SnapshotsLocationBase: substrateSnapshotsLocation,
 			SandboxClass:          substrateSandboxClass,

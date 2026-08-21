@@ -55,30 +55,62 @@ type Client struct {
 // required for TLS addresses: without a trust anchor the connection would have
 // to skip verification, which would let anything on the network impersonate the
 // control plane that governs every actor's lifecycle.
-func NewClient(addr, caFile string) (*Client, error) {
+//
+// tokenFile names a file holding the bearer token presented on every RPC. The
+// Substrate API authenticates callers by Kubernetes ServiceAccount JWT, so an
+// unauthenticated connection is rejected before it reaches a handler. Empty
+// dials without a token, which only works against a server that has
+// authentication disabled.
+func NewClient(addr, caFile, tokenFile string) (*Client, error) {
 	if addr == "" {
 		return nil, fmt.Errorf("substrate address must not be empty")
 	}
 
-	var creds grpc.DialOption
+	opts := make([]grpc.DialOption, 0, 2)
 	switch {
 	case strings.HasPrefix(addr, InsecureSchemePrefix):
 		addr = strings.TrimPrefix(addr, InsecureSchemePrefix)
-		creds = grpc.WithTransportCredentials(grpcinsecure.NewCredentials())
+		opts = append(opts, grpc.WithTransportCredentials(grpcinsecure.NewCredentials()))
 	default:
 		tlsCreds, err := loadTLSCredentials(caFile)
 		if err != nil {
 			return nil, err
 		}
-		creds = grpc.WithTransportCredentials(tlsCreds)
+		opts = append(opts, grpc.WithTransportCredentials(tlsCreds))
+	}
+	if tokenFile != "" {
+		opts = append(opts, grpc.WithPerRPCCredentials(fileBearerToken(tokenFile)))
 	}
 
-	conn, err := grpc.NewClient(addr, creds)
+	conn, err := grpc.NewClient(addr, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("dial substrate control at %s: %w", addr, err)
 	}
 	return &Client{conn: conn, control: ateapipb.NewControlClient(conn)}, nil
 }
+
+// fileBearerToken presents the token stored in a file as gRPC call credentials.
+//
+// The file is read per call rather than cached because a projected
+// ServiceAccount token is rewritten in place as it approaches expiry; a cached
+// value would keep working until the token expired and then fail for good.
+type fileBearerToken string
+
+func (f fileBearerToken) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
+	raw, err := os.ReadFile(string(f))
+	if err != nil {
+		return nil, fmt.Errorf("read substrate token file %s: %w", string(f), err)
+	}
+	token := strings.TrimSpace(string(raw))
+	if token == "" {
+		return nil, fmt.Errorf("substrate token file %s is empty", string(f))
+	}
+	return map[string]string{"authorization": "Bearer " + token}, nil
+}
+
+// RequireTransportSecurity reports false so an "insecure://" address stays
+// dialable in development; production addresses carry TLS from the dial options.
+func (f fileBearerToken) RequireTransportSecurity() bool { return false }
 
 func loadTLSCredentials(caFile string) (credentials.TransportCredentials, error) {
 	if caFile == "" {

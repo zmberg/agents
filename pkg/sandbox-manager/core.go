@@ -142,6 +142,10 @@ type SubstrateOptions struct {
 	Address string
 	// CAFile is the PEM bundle verifying the Substrate server certificate.
 	CAFile string
+	// TokenFile holds the bearer token presented to the Substrate API, which
+	// authenticates callers by Kubernetes ServiceAccount JWT. Empty dials
+	// unauthenticated.
+	TokenFile string
 	// DefaultHibernateMode applies when a claim resolves no pool-specific mode.
 	DefaultHibernateMode string
 }
@@ -151,7 +155,7 @@ type SubstrateOptions struct {
 // substrate infra keeps no informer cache of its own.
 func (b *SandboxManagerBuilder) WithSubstrateInfra(sopts SubstrateOptions) *SandboxManagerBuilder {
 	b.buildInfraFunc = func() (infra.Builder, error) {
-		substrateClient, err := substrate.NewClient(sopts.Address, sopts.CAFile)
+		substrateClient, err := substrate.NewClient(sopts.Address, sopts.CAFile, sopts.TokenFile)
 		if err != nil {
 			return nil, err
 		}
