@@ -35,7 +35,6 @@ import (
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
-	infracache "github.com/openkruise/agents/pkg/cache"
 	"github.com/openkruise/agents/pkg/sandbox-manager/logs"
 	"github.com/openkruise/agents/pkg/servers/e2b/keys"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
@@ -541,26 +540,28 @@ func TestValidateTeamNamespace(t *testing.T) {
 				return c.Get(ctx, key, obj, opts...)
 			},
 		})
-		origCache := controller.cache
-		controller.cache = &namespaceLookupFailingCache{Provider: origCache, client: failing}
-		t.Cleanup(func() { controller.cache = origCache })
+		origReader := controller.namespaceReader
+		controller.namespaceReader = failing
+		t.Cleanup(func() { controller.namespaceReader = origReader })
 
 		apiErr := controller.validateTeamNamespace(t.Context(), "team-a")
 		require.NotNil(t, apiErr)
 		assert.Equal(t, http.StatusInternalServerError, apiErr.Code)
 		assert.Contains(t, apiErr.Message, "Failed to validate")
 	})
-}
 
-// namespaceLookupFailingCache overrides the client a Provider hands out so
-// namespace lookups can fail with non-NotFound errors.
-type namespaceLookupFailingCache struct {
-	infracache.Provider
-	client ctrlclient.Client
-}
+	// A backend without an informer cache and without a rest config leaves the
+	// reader unset; the check must report that rather than dereference nil.
+	t.Run("missing reader maps to 500 instead of panicking", func(t *testing.T) {
+		origReader := controller.namespaceReader
+		controller.namespaceReader = nil
+		t.Cleanup(func() { controller.namespaceReader = origReader })
 
-func (c *namespaceLookupFailingCache) GetClient() ctrlclient.Client {
-	return c.client
+		apiErr := controller.validateTeamNamespace(t.Context(), "team-a")
+		require.NotNil(t, apiErr)
+		assert.Equal(t, http.StatusInternalServerError, apiErr.Code)
+		assert.Contains(t, apiErr.Message, "namespace reader is not configured")
+	})
 }
 
 func TestCheckApiKey_VolumeOwnership(t *testing.T) {

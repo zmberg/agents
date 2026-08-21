@@ -290,8 +290,14 @@ func (sc *Controller) validateTeamNamespace(ctx context.Context, teamName string
 			),
 		}
 	}
+	if sc.namespaceReader == nil {
+		return &web.ApiError{
+			Code:    http.StatusInternalServerError,
+			Message: "namespace reader is not configured",
+		}
+	}
 	namespace := &corev1.Namespace{}
-	if err := sc.cache.GetClient().Get(ctx, client.ObjectKey{Name: teamName}, namespace); err != nil {
+	if err := sc.namespaceReader.Get(ctx, client.ObjectKey{Name: teamName}, namespace); err != nil {
 		if apierrors.IsNotFound(err) || apierrors.IsInvalid(err) || apierrors.IsBadRequest(err) {
 			return &web.ApiError{
 				Code:    http.StatusBadRequest,

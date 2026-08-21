@@ -26,10 +26,10 @@ import (
 	"syscall"
 	"time"
 
-	"k8s.io/klog/v2"
 	apimachineryruntime "k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -75,8 +75,12 @@ type Controller struct {
 	// substrate holds the Substrate backend configuration. It is nil unless the
 	// substrate backend is enabled, in which case buildTemplate routes are
 	// registered and ActorTemplates are created through substrateClient.
-	substrate        *SubstrateConfig
-	substrateClient  client.Client
+	substrate       *SubstrateConfig
+	substrateClient client.Client
+	// namespaceReader resolves team namespaces. It is the informer-backed client
+	// when the backend has a cache, and a direct API reader otherwise, so the
+	// team-namespace check works on every backend.
+	namespaceReader client.Reader
 	// keyStorageMgr is a minimal controller-runtime manager created only when
 	// the substrate backend is in use (which has no informer cache of its own)
 	// to provide client, api-reader and cache for the secret key storage.
@@ -148,7 +152,7 @@ func NewController(opts ControllerOptions) *Controller {
 		mgrOpts:               opts.Manager,
 		runtimeTLSBundle:      opts.RuntimeTLSBundle,
 		// keyStorageMgr is populated lazily in Init when the substrate backend is active.
-		substrate:             opts.Substrate,
+		substrate: opts.Substrate,
 	}
 
 	sc.server = &http.Server{
@@ -190,6 +194,10 @@ func (sc *Controller) Init() error {
 	sc.cache = sandboxManager.GetInfra().GetCache()
 	sc.storageRegistry = storages.NewStorageProvider()
 
+	if err := sc.initNamespaceReader(); err != nil {
+		return err
+	}
+
 	// The substrate backend keeps no informer cache, so buildTemplate handlers
 	// need their own client to create and read ActorTemplates.
 	if sc.substrate.Enabled() {
@@ -209,9 +217,9 @@ func (sc *Controller) Init() error {
 		utilruntime.Must(clientgoscheme.AddToScheme(keyScheme))
 		keyMgr, err := ctrl.NewManager(sc.mgrOpts.RestConfig, ctrl.Options{
 			Scheme:                 keyScheme,
-			Metrics:               metricsserver.Options{BindAddress: "0"},
+			Metrics:                metricsserver.Options{BindAddress: "0"},
 			HealthProbeBindAddress: "0",
-			LeaderElection:        false,
+			LeaderElection:         false,
 		})
 		if err != nil {
 			return fmt.Errorf("create key-storage manager for substrate backend: %w", err)
@@ -240,6 +248,34 @@ func (sc *Controller) Init() error {
 			return err
 		}
 	}
+	return nil
+}
+
+// initNamespaceReader resolves the reader used to confirm that a team's
+// Kubernetes namespace exists.
+//
+// Backends that expose an informer cache reuse it. The substrate backend has no
+// cache at all (Infra.GetCache returns nil), so it falls back to a direct API
+// reader. A direct Get is acceptable here: the only caller validates a team
+// namespace while creating an API key, a rare administrative operation, and the
+// alternative would be a cluster-wide Namespace watch maintained solely for it.
+func (sc *Controller) initNamespaceReader() error {
+	if sc.cache != nil {
+		sc.namespaceReader = sc.cache.GetClient()
+		return nil
+	}
+	if sc.mgrOpts.RestConfig == nil {
+		// Unit tests build a Controller without a rest config; leave the reader
+		// nil and let validateTeamNamespace report it instead of panicking.
+		return nil
+	}
+	namespaceScheme := apimachineryruntime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(namespaceScheme))
+	reader, err := client.New(sc.mgrOpts.RestConfig, client.Options{Scheme: namespaceScheme})
+	if err != nil {
+		return fmt.Errorf("create namespace reader: %w", err)
+	}
+	sc.namespaceReader = reader
 	return nil
 }
 

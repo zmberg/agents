@@ -238,6 +238,7 @@ func setupWithMinResumeTimeoutAndQuota(t *testing.T, minResumeTimeout int, quota
 	require.NoError(t, err)
 
 	controller.cache = cache
+	require.NoError(t, controller.initNamespaceReader())
 	controller.manager = sandboxManager
 	controller.storageRegistry = storages.NewStorageProvider()
 	controller.registerRoutes()
