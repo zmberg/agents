@@ -33,7 +33,6 @@ func substrateController() *Controller {
 	return &Controller{
 		substrate: &SubstrateConfig{
 			Address:               "insecure://substrate:50051",
-			PauseImage:            "registry.k8s.io/pause@sha256:abc",
 			SnapshotsLocationBase: "s3://snapshots",
 			SandboxClass:          "gvisor",
 		},
@@ -74,7 +73,6 @@ func TestBuildActorTemplate(t *testing.T) {
 		require.Len(t, tmpl.Spec.Containers, 1)
 		assert.Equal(t, pinnedImage, tmpl.Spec.Containers[0].Image)
 		assert.Equal(t, []string{"/bin/sh", "-c", "/ko-app/counter"}, tmpl.Spec.Containers[0].Command)
-		assert.Equal(t, "registry.k8s.io/pause@sha256:abc", tmpl.Spec.PauseImage)
 		// Snapshots are separated per team namespace.
 		assert.Equal(t, "s3://snapshots/team-a/", tmpl.Spec.SnapshotsConfig.Location)
 	})
@@ -112,15 +110,6 @@ func TestBuildActorTemplate(t *testing.T) {
 		})
 		require.NotNil(t, apiErr)
 		assert.Contains(t, apiErr.Message, "pinned by digest")
-	})
-
-	t.Run("fails when the pause image is not configured", func(t *testing.T) {
-		bare := &Controller{substrate: &SubstrateConfig{Address: "insecure://s", SnapshotsLocationBase: "s3://x"}}
-		_, apiErr := bare.buildActorTemplate("team-a", "counter", "b1", models.TemplateBuildStart{
-			FromImage: pinnedImage,
-		})
-		require.NotNil(t, apiErr)
-		assert.Contains(t, apiErr.Message, "pause image is not configured")
 	})
 
 	t.Run("maps an HTTP readyCmd onto a readiness probe", func(t *testing.T) {

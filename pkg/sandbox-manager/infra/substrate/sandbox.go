@@ -314,10 +314,11 @@ func (s *Sandbox) applyActor(actor *ateapipb.Actor) {
 	}
 	phase := phaseOf(actor.GetStatus())
 	route := routeFromActor(s.meta, actor)
+	pool := actor.GetStatus().GetWorkerAssignment().GetWorkerPool()
 
 	s.meta.Phase = phase
 	s.meta.Route = route
-	if pool := actor.GetWorkerPoolName(); pool != "" {
+	if pool != "" {
 		s.meta.SandboxSetName = pool
 	}
 
@@ -325,7 +326,7 @@ func (s *Sandbox) applyActor(actor *ateapipb.Actor) {
 		s.store.Update(s.meta.SandboxID, func(m *Metadata) {
 			m.Phase = phase
 			m.Route = route
-			if pool := actor.GetWorkerPoolName(); pool != "" {
+			if pool != "" {
 				m.SandboxSetName = pool
 			}
 		})
@@ -375,26 +376,31 @@ func routeFromActorID(sandboxID, namespace, owner, actorID string, actor *ateapi
 		Owner:     owner,
 	}
 	if actor != nil {
-		route.IP = actor.GetAteomPodIp()
+		route.IP = actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp()
 		route.State = phaseOf(actor.GetStatus())
 	}
 	return route
 }
 
 // phaseOf collapses an actor status onto the phase reported to E2B. Transient
-// statuses report their destination so a caller polling for "paused" is not
+// states report their destination so a caller polling for "paused" is not
 // confused by an intermediate "pausing".
-func phaseOf(status ateapipb.Actor_Status) string {
-	switch status {
-	case ateapipb.Actor_STATUS_RUNNING:
+func phaseOf(status *ateapipb.ActorStatus) string {
+	switch status.GetState() {
+	case ateapipb.ActorState_ACTOR_STATE_RUNNING:
 		return PhaseRunning
-	case ateapipb.Actor_STATUS_RESUMING:
+	case ateapipb.ActorState_ACTOR_STATE_RESUMING:
 		return PhaseResuming
-	case ateapipb.Actor_STATUS_PAUSED, ateapipb.Actor_STATUS_PAUSING:
+	case ateapipb.ActorState_ACTOR_STATE_PAUSED, ateapipb.ActorState_ACTOR_STATE_PAUSING:
 		return PhasePaused
-	case ateapipb.Actor_STATUS_SUSPENDED, ateapipb.Actor_STATUS_SUSPENDING:
+	case ateapipb.ActorState_ACTOR_STATE_SUSPENDED, ateapipb.ActorState_ACTOR_STATE_SUSPENDING:
 		return PhaseSuspended
-	case ateapipb.Actor_STATUS_CRASHED:
+	case ateapipb.ActorState_ACTOR_STATE_CRASHED:
+		return PhaseCrashed
+	case ateapipb.ActorState_ACTOR_STATE_DELETING:
+		// A deleting actor no longer serves traffic and never returns to a
+		// serving state, so it reads as crashed rather than as a live phase that
+		// would keep the gateway routing to it.
 		return PhaseCrashed
 	default:
 		return ""

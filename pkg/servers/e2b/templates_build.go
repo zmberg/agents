@@ -205,12 +205,6 @@ func (sc *Controller) buildActorTemplate(
 	if !strings.Contains(req.FromImage, "@") {
 		return nil, badRequest("fromImage %q must be pinned by digest (contain '@sha256:...')", req.FromImage)
 	}
-	if sc.substrate.PauseImage == "" {
-		return nil, &web.ApiError{
-			Code:    http.StatusInternalServerError,
-			Message: "substrate pause image is not configured",
-		}
-	}
 
 	container := atev1alpha1.Container{Name: defaultContainerName, Image: req.FromImage}
 	if req.Extensions.ContainerName != "" {
@@ -240,7 +234,6 @@ func (sc *Controller) buildActorTemplate(
 			},
 		},
 		Spec: atev1alpha1.ActorTemplateSpec{
-			PauseImage:      sc.substrate.PauseImage,
 			Containers:      []atev1alpha1.Container{container},
 			SandboxClass:    atev1alpha1.SandboxClass(sc.substrate.SandboxClass),
 			SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: snapshotsLocation},

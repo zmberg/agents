@@ -99,8 +99,6 @@ type SubstrateConfig struct {
 	// TokenFile holds the bearer token presented to the Substrate API, which
 	// authenticates callers by Kubernetes ServiceAccount JWT.
 	TokenFile string
-	// PauseImage is the pinned pause container image for generated ActorTemplates.
-	PauseImage string
 	// SnapshotsLocationBase is the root snapshot location; the per-template
 	// location is this joined with the team namespace.
 	SnapshotsLocationBase string

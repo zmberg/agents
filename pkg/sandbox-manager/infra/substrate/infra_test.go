@@ -81,10 +81,7 @@ func (f *fakeControl) ResumeActor(_ context.Context, in *ateapipb.ResumeActorReq
 	if f.resumeActor != nil {
 		return f.resumeActor(in)
 	}
-	return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{
-		Status:     ateapipb.Actor_STATUS_RUNNING,
-		AteomPodIp: "10.0.0.5",
-	}}, nil
+	return &ateapipb.ResumeActorResponse{Actor: runningActor()}, nil
 }
 
 func (f *fakeControl) PauseActor(_ context.Context, in *ateapipb.PauseActorRequest, _ ...grpc.CallOption) (*ateapipb.PauseActorResponse, error) {
@@ -114,7 +111,20 @@ func (f *fakeControl) GetActor(_ context.Context, in *ateapipb.GetActorRequest, 
 	if f.getActor != nil {
 		return f.getActor(in)
 	}
-	return &ateapipb.Actor{Status: ateapipb.Actor_STATUS_RUNNING, AteomPodIp: "10.0.0.5"}, nil
+	return runningActor(), nil
+}
+
+// runningActor is a running actor already placed on a worker. The worker
+// assignment carries the pod IP, which is what a route is built from.
+func runningActor() *ateapipb.Actor {
+	return &ateapipb.Actor{
+		Status: &ateapipb.ActorStatus{
+			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				WorkerPodIp: "10.0.0.5",
+			},
+		},
+	}
 }
 
 // fakeResolver returns a fixed resolved template, standing in for the client

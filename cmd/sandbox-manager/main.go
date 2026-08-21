@@ -107,7 +107,6 @@ func main() {
 	var substrateAddr string
 	var substrateCAFile string
 	var substrateTokenFile string
-	var substratePauseImage string
 	var substrateSnapshotsLocation string
 	var substrateSandboxClass string
 	var substrateHibernateMode string
@@ -175,8 +174,6 @@ func main() {
 		"File holding the bearer token presented to the Substrate control API, which authenticates callers by "+
 			"Kubernetes ServiceAccount JWT. Point it at a projected ServiceAccount token whose audience matches the "+
 			"Substrate API server.")
-	pflag.StringVar(&substratePauseImage, "substrate-pause-image", "",
-		"Pinned pause container image used for ActorTemplates created through the E2B build API.")
 	pflag.StringVar(&substrateSnapshotsLocation, "substrate-snapshots-location", "",
 		"Base snapshot location for ActorTemplates; the per-template location appends the team namespace.")
 	pflag.StringVar(&substrateSandboxClass, "substrate-sandbox-class", "gvisor",
@@ -347,7 +344,6 @@ func main() {
 			Address:               substrateAddr,
 			CAFile:                substrateCAFile,
 			TokenFile:             substrateTokenFile,
-			PauseImage:            substratePauseImage,
 			SnapshotsLocationBase: substrateSnapshotsLocation,
 			SandboxClass:          substrateSandboxClass,
 			DefaultHibernateMode:  substrateHibernateMode,
