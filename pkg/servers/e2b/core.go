@@ -27,7 +27,12 @@ import (
 	"time"
 
 	"k8s.io/klog/v2"
+	apimachineryruntime "k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"github.com/openkruise/agents/pkg/agent-runtime/storages"
 	"github.com/openkruise/agents/pkg/cache"
@@ -37,7 +42,7 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/logs"
 	"github.com/openkruise/agents/pkg/servers/e2b/adapters"
 	"github.com/openkruise/agents/pkg/servers/e2b/keys"
-	utilruntime "github.com/openkruise/agents/pkg/utils/runtime"
+	agentutilruntime "github.com/openkruise/agents/pkg/utils/runtime"
 )
 
 // Controller handles sandbox-related operations
@@ -55,7 +60,7 @@ type Controller struct {
 	// runtimeTLSBundle is the client TLS bundle for reaching TLS-capable
 	// agent-runtimes; nil disables runtime TLS for this manager, so every
 	// sandbox is served over the legacy plaintext paths.
-	runtimeTLSBundle *utilruntime.TLSBundle
+	runtimeTLSBundle *agentutilruntime.TLSBundle
 
 	// fields
 	mux             *http.ServeMux
@@ -70,8 +75,12 @@ type Controller struct {
 	// substrate holds the Substrate backend configuration. It is nil unless the
 	// substrate backend is enabled, in which case buildTemplate routes are
 	// registered and ActorTemplates are created through substrateClient.
-	substrate       *SubstrateConfig
-	substrateClient client.Client
+	substrate        *SubstrateConfig
+	substrateClient  client.Client
+	// keyStorageMgr is a minimal controller-runtime manager created only when
+	// the substrate backend is in use (which has no informer cache of its own)
+	// to provide client, api-reader and cache for the secret key storage.
+	keyStorageMgr ctrl.Manager
 }
 
 // SubstrateConfig carries the deployment-level inputs the E2B template build
@@ -121,7 +130,7 @@ type ControllerOptions struct {
 	// RuntimeTLSBundle is the client TLS bundle used to reach TLS-capable
 	// agent-runtimes during claim and clone post-processing. Nil keeps every
 	// runtime call on the legacy plaintext paths.
-	RuntimeTLSBundle *utilruntime.TLSBundle
+	RuntimeTLSBundle *agentutilruntime.TLSBundle
 	// Substrate enables and configures the Substrate backend. Nil or an empty
 	// Address keeps the default Sandbox CR backend.
 	Substrate *SubstrateConfig
@@ -138,6 +147,7 @@ func NewController(opts ControllerOptions) *Controller {
 		keyCfg:                opts.KeyConfig,
 		mgrOpts:               opts.Manager,
 		runtimeTLSBundle:      opts.RuntimeTLSBundle,
+		// keyStorageMgr is populated lazily in Init when the substrate backend is active.
 		substrate:             opts.Substrate,
 	}
 
@@ -190,6 +200,28 @@ func (sc *Controller) Init() error {
 		sc.substrateClient = templateClient
 	}
 
+	// The substrate backend has no informer cache (GetCache returns nil). The
+	// secret key storage requires a controller-runtime client, api-reader, and
+	// cache to watch for API-key changes. Build a lightweight manager for this
+	// purpose, scoped only to the system namespace.
+	if sc.keyCfg != nil && sc.cache == nil && sc.mgrOpts.RestConfig != nil {
+		keyScheme := apimachineryruntime.NewScheme()
+		utilruntime.Must(clientgoscheme.AddToScheme(keyScheme))
+		keyMgr, err := ctrl.NewManager(sc.mgrOpts.RestConfig, ctrl.Options{
+			Scheme:                 keyScheme,
+			Metrics:               metricsserver.Options{BindAddress: "0"},
+			HealthProbeBindAddress: "0",
+			LeaderElection:        false,
+		})
+		if err != nil {
+			return fmt.Errorf("create key-storage manager for substrate backend: %w", err)
+		}
+		sc.keyCfg.Client = keyMgr.GetClient()
+		sc.keyCfg.APIReader = keyMgr.GetAPIReader()
+		sc.keyCfg.Cache = keyMgr.GetCache()
+		sc.keyStorageMgr = keyMgr
+	}
+
 	sc.registerRoutes()
 
 	if err := sc.initKeyStorage(ctx); err != nil {
@@ -240,6 +272,19 @@ func (sc *Controller) Run() (context.Context, error) {
 	signal.Notify(sc.stop, syscall.SIGINT, syscall.SIGTERM)
 	if err := sc.manager.Run(ctx); err != nil {
 		klog.Fatalf("Sandbox manager failed to start: %v", err)
+	}
+
+	// When using the substrate backend, start the key-storage manager and wait
+	// for its cache to sync before the key store begins watching events.
+	if sc.keyStorageMgr != nil {
+		go func() {
+			if err := sc.keyStorageMgr.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				klog.ErrorS(err, "key-storage manager exited")
+			}
+		}()
+		if !sc.keyStorageMgr.GetCache().WaitForCacheSync(ctx) {
+			return nil, fmt.Errorf("key-storage cache failed to sync")
+		}
 	}
 
 	// Run HTTP server in a goroutine
