@@ -5,6 +5,7 @@ go 1.26.3
 require (
 	connectrpc.com/connect v1.19.1
 	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/agent-substrate/substrate v0.0.0-20260728075327-7ec39a23f977
 	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/cncf/xds/go v0.0.0-20260202195803-dba9d589def2
 	github.com/container-storage-interface/spec v1.9.0
@@ -52,7 +53,6 @@ require (
 )
 
 require (
-	github.com/agent-substrate/substrate v0.0.0-00010101000000-000000000000 // indirect
 	github.com/go-openapi/swag/cmdutils v0.25.4 // indirect
 	github.com/go-openapi/swag/conv v0.25.4 // indirect
 	github.com/go-openapi/swag/fileutils v0.25.4 // indirect
@@ -64,7 +64,6 @@ require (
 	github.com/go-openapi/swag/stringutils v0.25.4 // indirect
 	github.com/go-openapi/swag/typeutils v0.25.4 // indirect
 	github.com/go-openapi/swag/yamlutils v0.25.4 // indirect
-	github.com/klauspost/compress v1.18.6 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.65.0 // indirect
 	k8s.io/streaming v0.36.1 // indirect
 )
@@ -161,5 +160,3 @@ require (
 )
 
 replace k8s.io/client-go => k8s.io/client-go v0.36.1
-
-replace github.com/agent-substrate/substrate => /Users/zhaomingshan/workspace/go/src/github.com/agent-substrate/substrate
