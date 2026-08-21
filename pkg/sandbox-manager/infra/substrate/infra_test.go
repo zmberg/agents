@@ -18,6 +18,7 @@ package substrate
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -46,6 +48,7 @@ type fakeControl struct {
 	suspendActor func(*ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error)
 	deleteActor  func(*ateapipb.DeleteActorRequest) (*ateapipb.Actor, error)
 	getActor     func(*ateapipb.GetActorRequest) (*ateapipb.Actor, error)
+	listActors   func(*ateapipb.ListActorsRequest) (*ateapipb.ListActorsResponse, error)
 
 	// captured requests for assertions
 	lastCreate  *ateapipb.CreateActorRequest
@@ -112,6 +115,13 @@ func (f *fakeControl) GetActor(_ context.Context, in *ateapipb.GetActorRequest, 
 		return f.getActor(in)
 	}
 	return runningActor(), nil
+}
+
+func (f *fakeControl) ListActors(_ context.Context, in *ateapipb.ListActorsRequest, _ ...grpc.CallOption) (*ateapipb.ListActorsResponse, error) {
+	if f.listActors != nil {
+		return f.listActors(in)
+	}
+	return &ateapipb.ListActorsResponse{}, nil
 }
 
 // runningActor is a running actor already placed on a worker. The worker
@@ -291,5 +301,163 @@ func TestSandboxPauseResume(t *testing.T) {
 		require.NoError(t, sbx.Resume(ctx, infra.ResumeOptions{}))
 		assert.Equal(t, PhaseRunning, sbx.Phase())
 		assert.Equal(t, "10.0.0.5", sbx.GetIP())
+	})
+}
+
+// actorIn builds a listable actor in an atespace with the given state.
+func actorIn(atespace, actorID string, state ateapipb.ActorState, workerPool, podIP string) *ateapipb.Actor {
+	return &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{
+			Atespace:   atespace,
+			Name:       actorID,
+			CreateTime: timestamppb.New(time.Now().Add(-time.Hour)),
+		},
+		ActorTemplateName: "counter-b1",
+		Status: &ateapipb.ActorStatus{
+			State: state,
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				WorkerPool:  workerPool,
+				WorkerPodIp: podIP,
+			},
+		},
+	}
+}
+
+// The metadata store is process memory, so a restart orphans every actor it
+// created. Run recovers them so their workers can still be reclaimed.
+func TestInfraRunRecoversActors(t *testing.T) {
+	ctx := context.Background()
+	const actorID = "ca9930ae-f2e6-4319-8748-ee2daea1d1be"
+
+	t.Run("a running actor is recovered and its route published", func(t *testing.T) {
+		control := newFakeControl()
+		control.listActors = func(*ateapipb.ListActorsRequest) (*ateapipb.ListActorsResponse, error) {
+			return &ateapipb.ListActorsResponse{Actors: []*ateapipb.Actor{
+				actorIn("team-a", actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING, "msb-workerpool", "10.0.0.9"),
+			}}, nil
+		}
+		i := newInfraWithFake(t, control)
+
+		var published []string
+		require.NoError(t, i.routes.Subscribe(ctx, func(_ context.Context, ev infra.SandboxRouteEvent) {
+			if ev.Sandbox != nil {
+				published = append(published, ev.Sandbox.GetSandboxID())
+			}
+		}))
+
+		require.NoError(t, i.Run(ctx))
+
+		// The ID must match what a claim would have derived, or the caller's ID
+		// would no longer resolve.
+		wantID := "team-a--ca9930ae"
+		got, err := i.store.Get(wantID)
+		require.NoError(t, err)
+		assert.Equal(t, actorID, got.ActorID)
+		assert.Equal(t, "team-a", got.Namespace)
+		assert.Equal(t, PhaseRunning, got.Phase)
+		assert.Equal(t, "msb-workerpool", got.SandboxSetName)
+		assert.Equal(t, "10.0.0.9", got.Route.IP)
+		assert.Equal(t, []string{wantID}, published)
+
+		// Substrate stores neither, so a recovered sandbox has no owner and never
+		// expires on its own.
+		assert.Empty(t, got.Owner)
+		assert.True(t, got.Timeout.ShutdownTime.IsZero())
+	})
+
+	tests := []struct {
+		name  string
+		actor *ateapipb.Actor
+	}{
+		{
+			// Golden actors belong to a template, not to a sandbox.
+			name:  "golden actors are skipped",
+			actor: actorIn(goldenActorAtespace, actorID, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "", ""),
+		},
+		{
+			// A crashed actor holds no worker worth reclaiming.
+			name:  "crashed actors are skipped",
+			actor: actorIn("team-a", actorID, ateapipb.ActorState_ACTOR_STATE_CRASHED, "", ""),
+		},
+		{
+			name:  "actors with an unknown state are skipped",
+			actor: actorIn("team-a", actorID, ateapipb.ActorState_ACTOR_STATE_UNSPECIFIED, "", ""),
+		},
+		{
+			name:  "actors without an atespace are skipped",
+			actor: actorIn("", actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING, "", "10.0.0.9"),
+		},
+		{
+			name:  "actors without a name are skipped",
+			actor: actorIn("team-a", "", ateapipb.ActorState_ACTOR_STATE_RUNNING, "", "10.0.0.9"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			control := newFakeControl()
+			control.listActors = func(*ateapipb.ListActorsRequest) (*ateapipb.ListActorsResponse, error) {
+				return &ateapipb.ListActorsResponse{Actors: []*ateapipb.Actor{tt.actor}}, nil
+			}
+			i := newInfraWithFake(t, control)
+			require.NoError(t, i.Run(ctx))
+			assert.Empty(t, i.store.List(ListOptions{}))
+		})
+	}
+
+	// Suspended actors hold no worker but must still be listable and deletable.
+	t.Run("a suspended actor is recovered without a route", func(t *testing.T) {
+		control := newFakeControl()
+		control.listActors = func(*ateapipb.ListActorsRequest) (*ateapipb.ListActorsResponse, error) {
+			return &ateapipb.ListActorsResponse{Actors: []*ateapipb.Actor{
+				actorIn("team-a", actorID, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, "", ""),
+			}}, nil
+		}
+		i := newInfraWithFake(t, control)
+		require.NoError(t, i.Run(ctx))
+
+		got, err := i.store.Get("team-a--ca9930ae")
+		require.NoError(t, err)
+		assert.Equal(t, PhaseSuspended, got.Phase)
+		assert.Empty(t, got.Route.IP)
+	})
+
+	t.Run("every page is walked", func(t *testing.T) {
+		control := newFakeControl()
+		calls := 0
+		control.listActors = func(in *ateapipb.ListActorsRequest) (*ateapipb.ListActorsResponse, error) {
+			calls++
+			if in.GetPageToken() == "" {
+				return &ateapipb.ListActorsResponse{
+					Actors:        []*ateapipb.Actor{actorIn("team-a", actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING, "p", "10.0.0.9")},
+					NextPageToken: "page-2",
+				}, nil
+			}
+			return &ateapipb.ListActorsResponse{Actors: []*ateapipb.Actor{
+				actorIn("team-b", "bb35d960-b2c7-4e54-a96b-147830683bcd", ateapipb.ActorState_ACTOR_STATE_RUNNING, "p", "10.0.0.10"),
+			}}, nil
+		}
+		i := newInfraWithFake(t, control)
+		require.NoError(t, i.Run(ctx))
+
+		assert.Equal(t, 2, calls)
+		assert.Len(t, i.store.List(ListOptions{}), 2)
+	})
+
+	// A recovery failure leaves orphans behind, but the manager must still come
+	// up and serve new claims.
+	t.Run("a list failure does not stop the manager", func(t *testing.T) {
+		control := newFakeControl()
+		control.listActors = func(*ateapipb.ListActorsRequest) (*ateapipb.ListActorsResponse, error) {
+			return nil, errors.New("substrate unavailable")
+		}
+		i := newInfraWithFake(t, control)
+		assert.NoError(t, i.Run(ctx))
+		assert.Empty(t, i.store.List(ListOptions{}))
+	})
+
+	t.Run("a missing control client is reported", func(t *testing.T) {
+		i := newInfraWithFake(t, nil)
+		i.control = nil
+		assert.Error(t, i.Run(ctx))
 	})
 }

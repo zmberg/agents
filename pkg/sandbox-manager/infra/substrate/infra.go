@@ -28,6 +28,7 @@ import (
 	"github.com/openkruise/agents/pkg/cache"
 	managererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
+	"github.com/openkruise/agents/pkg/sandboxid"
 )
 
 // MetadataKeySandboxSet is the E2B create metadata key that pins a sandbox to a
@@ -36,6 +37,19 @@ import (
 // annotations, so this is read from the sandbox annotations after the claim
 // modifier runs.
 const MetadataKeySandboxSet = "e2b.agents.kruise.io/sandboxset"
+
+const (
+	// goldenActorAtespace holds the per-template golden actors that produce a
+	// template's snapshot. They are not sandboxes and must never be recovered as
+	// one.
+	goldenActorAtespace = "ate-golden"
+	// actorRecoveryPageSize bounds one recovery page. Recovery runs once at
+	// startup, so it trades more round trips for a smaller response.
+	actorRecoveryPageSize = 200
+	// sandboxIDActorPrefixLen is how much of the actor UUID the sandbox ID
+	// carries. It keeps the ID short while staying collision-free in practice.
+	sandboxIDActorPrefixLen = 8
+)
 
 // Infra is the Substrate implementation of infra.Infrastructure.
 //
@@ -55,9 +69,130 @@ type Infra struct {
 
 var _ infra.Infrastructure = (*Infra)(nil)
 
-// Run starts background work. The substrate backend has none: there is no
-// informer to sync and no cache to warm.
-func (i *Infra) Run(_ context.Context) error { return nil }
+// Run rebuilds the metadata store from the actors Substrate already holds.
+//
+// The store lives in this process's memory, so a restart would otherwise orphan
+// every actor it created: Substrate keeps running them and their workers stay
+// occupied, while this process no longer knows they exist and can neither list,
+// delete, nor time them out. Recovering them on startup makes those actors
+// addressable again so their workers can be reclaimed.
+//
+// Recovery is best effort. Substrate stores no owner or timeout for an actor, so
+// a recovered sandbox has neither: it is visible and deletable, but it is not
+// attributed to a user and will not expire on its own. A caller that needs those
+// guarantees must not rely on a recovered record.
+func (i *Infra) Run(ctx context.Context) error {
+	if i.control == nil {
+		return errNoControlClient()
+	}
+	log := klog.FromContext(ctx)
+
+	actors, err := i.listAllActors(ctx)
+	if err != nil {
+		// A failed recovery leaves orphans behind but must not stop the manager
+		// from serving new claims, so report it and carry on.
+		log.Error(err, "failed to recover substrate actors; actors created before this restart stay orphaned")
+		return nil
+	}
+
+	recovered := 0
+	for _, actor := range actors {
+		meta := metadataFromActor(actor, i.defaultHibernateMode)
+		if meta == nil {
+			continue
+		}
+		if _, err := i.store.Get(meta.SandboxID); err == nil {
+			// Already known, so a concurrent claim owns the authoritative record.
+			continue
+		}
+		i.store.Put(meta)
+		recovered++
+		if meta.Route.IP != "" {
+			i.routes.publish(NewSandbox(meta, i.control, i.store, i.locks))
+		}
+		log.V(1).Info("recovered substrate actor",
+			"sandboxID", meta.SandboxID, "actorID", meta.ActorID,
+			"atespace", meta.Atespace, "phase", meta.Phase)
+	}
+	if recovered > 0 {
+		log.Info("recovered substrate actors into the metadata store",
+			"count", recovered,
+			"note", "recovered sandboxes carry no owner or timeout")
+	}
+	return nil
+}
+
+// listAllActors pages through every actor in every atespace. An empty atespace
+// in the request is the cross-atespace form.
+func (i *Infra) listAllActors(ctx context.Context) ([]*ateapipb.Actor, error) {
+	var (
+		actors []*ateapipb.Actor
+		token  string
+	)
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		page, err := i.control.ListActors(ctx, &ateapipb.ListActorsRequest{
+			PageSize:  actorRecoveryPageSize,
+			PageToken: token,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list substrate actors: %w", err)
+		}
+		actors = append(actors, page.GetActors()...)
+		token = page.GetNextPageToken()
+		if token == "" {
+			return actors, nil
+		}
+	}
+}
+
+// metadataFromActor projects an actor back onto the record a claim would have
+// stored. It returns nil for an actor this backend does not own: a golden actor
+// belongs to a template rather than to a sandbox, and an actor without an
+// identity cannot be addressed.
+func metadataFromActor(actor *ateapipb.Actor, hibernateMode string) *Metadata {
+	atespace := actor.GetMetadata().GetAtespace()
+	actorID := actor.GetMetadata().GetName()
+	if atespace == "" || atespace == goldenActorAtespace || actorID == "" {
+		return nil
+	}
+	phase := phaseOf(actor.GetStatus())
+	if phase == "" || phase == PhaseCrashed {
+		// A crashed or unknown actor holds no worker worth reclaiming and would
+		// only surface as a sandbox that can never serve traffic.
+		return nil
+	}
+	// The sandbox ID is derived, not stored, so it has to be rebuilt exactly the
+	// way ClaimSandbox derived it or the recovered sandbox answers to a different
+	// name than the one the caller holds.
+	sandboxID := deriveSandboxID(atespace, actorID)
+	createTime := actor.GetMetadata().GetCreateTime().AsTime()
+	return &Metadata{
+		SandboxID:         sandboxID,
+		ActorID:           actorID,
+		Atespace:          atespace,
+		Namespace:         atespace,
+		ActorTemplateName: actor.GetActorTemplateName(),
+		SandboxSetName:    actor.GetStatus().GetWorkerAssignment().GetWorkerPool(),
+		Phase:             phase,
+		Route:             routeFromActorID(sandboxID, atespace, "", actorID, actor),
+		CreateTime:        createTime,
+		LastActiveTime:    createTime,
+		HibernateMode:     hibernateMode,
+	}
+}
+
+// deriveSandboxID names the sandbox that fronts an actor. The ID is derived
+// rather than stored, so a claim and a recovery must derive it identically or the
+// same actor would answer to two different sandbox IDs.
+func deriveSandboxID(namespace, actorID string) string {
+	if len(actorID) > sandboxIDActorPrefixLen {
+		actorID = actorID[:sandboxIDActorPrefixLen]
+	}
+	return fmt.Sprintf("%s%s%s", namespace, sandboxid.LegacySeparator, actorID)
+}
 
 // Stop is a no-op; the gRPC connection is owned by the builder's client.
 func (i *Infra) Stop(_ context.Context) {}
@@ -140,7 +275,7 @@ func (i *Infra) ClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions
 	}
 
 	actorID := uuid.NewString()
-	sandboxID := fmt.Sprintf("%s--%s", opts.Namespace, actorID[:8])
+	sandboxID := deriveSandboxID(opts.Namespace, actorID)
 
 	unlock := i.locks.Lock(actorID)
 	defer unlock()
