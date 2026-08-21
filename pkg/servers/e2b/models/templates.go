@@ -115,6 +115,24 @@ type TemplateBuildStart struct {
 	Steps        []TemplateStep `json:"steps"`
 	StartCmd     string         `json:"startCmd"`
 	ReadyCmd     string         `json:"readyCmd"`
+	// Extensions carries backend settings the E2B build protocol cannot express.
+	// They arrive as request headers because the E2B SDK's Template.build only
+	// forwards headers, never extra body fields.
+	Extensions TemplateBuildStartExtension `json:"-"`
+}
+
+// TemplateBuildStartExtension holds the substrate-specific build settings
+// parsed from the x-e2b-kruise-* request headers. A zero value means the
+// backend default applies.
+type TemplateBuildStartExtension struct {
+	// WorkerSelector restricts which worker pools the template's actors may use.
+	// Nil leaves every pool eligible.
+	WorkerSelector map[string]string
+	// ContainerName overrides the generated container name.
+	ContainerName string
+	// SnapshotsLocation overrides the snapshot base URI derived from the
+	// server-side location flag.
+	SnapshotsLocation string
 }
 
 // TemplateBuildInfo is the body of GET /templates/{id}/builds/{buildID}/status.

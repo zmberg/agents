@@ -133,6 +133,36 @@ func TestBuildActorTemplate(t *testing.T) {
 		assert.Equal(t, "/healthz", tmpl.Spec.Containers[0].Readyz.HTTPGet.Path)
 		assert.Equal(t, int32(8080), tmpl.Spec.Containers[0].Readyz.HTTPGet.Port)
 	})
+
+	// The E2B build protocol cannot express worker placement, the container
+	// name, or a per-template snapshot location, so they arrive as headers.
+	t.Run("header extensions override the generated spec", func(t *testing.T) {
+		tmpl, apiErr := sc.buildActorTemplate("team-a", "counter", "b1", models.TemplateBuildStart{
+			FromImage: pinnedImage,
+			Extensions: models.TemplateBuildStartExtension{
+				WorkerSelector:    map[string]string{"workload": "microsandbox"},
+				ContainerName:     "app",
+				SnapshotsLocation: "local://msb-snapshots",
+			},
+		})
+		require.Nil(t, apiErr)
+		require.NotNil(t, tmpl.Spec.WorkerSelector)
+		assert.Equal(t, map[string]string{"workload": "microsandbox"}, tmpl.Spec.WorkerSelector.MatchLabels)
+		assert.Equal(t, "app", tmpl.Spec.Containers[0].Name)
+		assert.Equal(t, "local://msb-snapshots", tmpl.Spec.SnapshotsConfig.Location)
+	})
+
+	// A nil WorkerSelector leaves every pool eligible, so an absent header must
+	// not degrade into an empty selector.
+	t.Run("absent extensions keep the backend defaults", func(t *testing.T) {
+		tmpl, apiErr := sc.buildActorTemplate("team-a", "counter", "b1", models.TemplateBuildStart{
+			FromImage: pinnedImage,
+		})
+		require.Nil(t, apiErr)
+		assert.Nil(t, tmpl.Spec.WorkerSelector)
+		assert.Equal(t, defaultContainerName, tmpl.Spec.Containers[0].Name)
+		assert.Equal(t, "s3://snapshots/team-a/", tmpl.Spec.SnapshotsConfig.Location)
+	})
 }
 
 func TestParseReadyCmd(t *testing.T) {

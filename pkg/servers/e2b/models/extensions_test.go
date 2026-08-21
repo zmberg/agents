@@ -1792,3 +1792,115 @@ func TestNewVolumeRequest_ParseExtensions(t *testing.T) {
 		})
 	}
 }
+
+// --- TemplateBuildStart.ParseExtensions tests ---
+func TestTemplateBuildStart_ParseExtensions(t *testing.T) {
+	tests := []struct {
+		name           string
+		setupHeaders   func(h http.Header)
+		expectError    string
+		expectSelector map[string]string
+		expectName     string
+		expectLocation string
+	}{
+		{
+			name:         "no headers leaves every field at its backend default",
+			setupHeaders: func(h http.Header) {},
+		},
+		{
+			name: "all headers set",
+			setupHeaders: func(h http.Header) {
+				h.Set(ExtensionHeaderTemplateWorkerSelector, "workload=microsandbox")
+				h.Set(ExtensionHeaderTemplateContainerName, "app")
+				h.Set(ExtensionHeaderTemplateSnapshotsLocation, "local://msb-snapshots")
+			},
+			expectSelector: map[string]string{"workload": "microsandbox"},
+			expectName:     "app",
+			expectLocation: "local://msb-snapshots",
+		},
+		{
+			name: "multi-pair selector with surrounding spaces",
+			setupHeaders: func(h http.Header) {
+				h.Set(ExtensionHeaderTemplateWorkerSelector, " workload=microsandbox , tier=prod ")
+			},
+			expectSelector: map[string]string{"workload": "microsandbox", "tier": "prod"},
+		},
+		{
+			// A prefixed label name stays valid; only the name half is qualified.
+			name: "prefixed selector key",
+			setupHeaders: func(h http.Header) {
+				h.Set(ExtensionHeaderTemplateWorkerSelector, "agents.kruise.io/sandboxset=msb-demo")
+			},
+			expectSelector: map[string]string{"agents.kruise.io/sandboxset": "msb-demo"},
+		},
+		{
+			name: "an empty selector value is a valid label value",
+			setupHeaders: func(h http.Header) {
+				h.Set(ExtensionHeaderTemplateWorkerSelector, "workload=")
+			},
+			expectSelector: map[string]string{"workload": ""},
+		},
+		{
+			name: "blank header is treated as absent",
+			setupHeaders: func(h http.Header) {
+				h.Set(ExtensionHeaderTemplateWorkerSelector, "   ")
+				h.Set(ExtensionHeaderTemplateContainerName, "   ")
+				h.Set(ExtensionHeaderTemplateSnapshotsLocation, "   ")
+			},
+		},
+		{
+			name: "selector without an equals sign",
+			setupHeaders: func(h http.Header) {
+				h.Set(ExtensionHeaderTemplateWorkerSelector, "workload")
+			},
+			expectError: "expected key=value pairs",
+		},
+		{
+			name: "selector with only separators",
+			setupHeaders: func(h http.Header) {
+				h.Set(ExtensionHeaderTemplateWorkerSelector, ",,")
+			},
+			expectError: "no label pairs found",
+		},
+		{
+			name: "invalid selector label name",
+			setupHeaders: func(h http.Header) {
+				h.Set(ExtensionHeaderTemplateWorkerSelector, "bad label=x")
+			},
+			expectError: "invalid label name",
+		},
+		{
+			name: "invalid selector label value",
+			setupHeaders: func(h http.Header) {
+				h.Set(ExtensionHeaderTemplateWorkerSelector, "workload=-bad-")
+			},
+			expectError: "invalid label value",
+		},
+		{
+			// The container name lands on the CRD, which requires a DNS label.
+			name: "invalid container name",
+			setupHeaders: func(h http.Header) {
+				h.Set(ExtensionHeaderTemplateContainerName, "App_1")
+			},
+			expectError: "invalid " + ExtensionHeaderTemplateContainerName,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := make(http.Header)
+			tt.setupHeaders(h)
+			req := &TemplateBuildStart{}
+			err := req.ParseExtensions(h)
+			if tt.expectError != "" {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectSelector, req.Extensions.WorkerSelector)
+			assert.Equal(t, tt.expectName, req.Extensions.ContainerName)
+			assert.Equal(t, tt.expectLocation, req.Extensions.SnapshotsLocation)
+		})
+	}
+}

@@ -46,6 +46,11 @@ var substrateScheme = func() *runtime.Scheme {
 	return scheme
 }()
 
+// defaultContainerName names the generated workload container when the caller
+// does not override it. E2B has no container-name concept, so a build carries
+// one unnamed image and the name only has to be a stable, valid DNS label.
+const defaultContainerName = "main"
+
 // registerSubstrateRoutes registers the E2B template build endpoints. They are
 // only useful on the substrate backend; on other backends the handlers reject
 // with 501, so registration is unconditional to keep the route table stable.
@@ -112,6 +117,9 @@ func (sc *Controller) StartTemplateBuild(r *http.Request) (web.ApiResponse[struc
 	var req models.TemplateBuildStart
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return web.ApiResponse[struct{}]{}, badRequest("decode build start request: %v", err)
+	}
+	if err := req.ParseExtensions(r.Header); err != nil {
+		return web.ApiResponse[struct{}]{}, badRequest("%v", err)
 	}
 
 	tmpl, apiErr := sc.buildActorTemplate(namespace, templateID, buildID, req)
@@ -204,7 +212,10 @@ func (sc *Controller) buildActorTemplate(
 		}
 	}
 
-	container := atev1alpha1.Container{Name: "main", Image: req.FromImage}
+	container := atev1alpha1.Container{Name: defaultContainerName, Image: req.FromImage}
+	if req.Extensions.ContainerName != "" {
+		container.Name = req.Extensions.ContainerName
+	}
 	if req.StartCmd != "" {
 		container.Command = []string{"/bin/sh", "-c", req.StartCmd}
 	}
@@ -214,7 +225,12 @@ func (sc *Controller) buildActorTemplate(
 	}
 	container.Readyz = readyz
 
-	return &atev1alpha1.ActorTemplate{
+	snapshotsLocation := sc.snapshotsLocation(namespace)
+	if req.Extensions.SnapshotsLocation != "" {
+		snapshotsLocation = req.Extensions.SnapshotsLocation
+	}
+
+	tmpl := &atev1alpha1.ActorTemplate{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      templateID + "-" + buildID,
 			Namespace: namespace,
@@ -227,9 +243,17 @@ func (sc *Controller) buildActorTemplate(
 			PauseImage:      sc.substrate.PauseImage,
 			Containers:      []atev1alpha1.Container{container},
 			SandboxClass:    atev1alpha1.SandboxClass(sc.substrate.SandboxClass),
-			SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: sc.snapshotsLocation(namespace)},
+			SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: snapshotsLocation},
 		},
-	}, nil
+	}
+	// A nil selector leaves every worker pool eligible, so only set it when the
+	// caller asked to narrow the set.
+	if len(req.Extensions.WorkerSelector) > 0 {
+		tmpl.Spec.WorkerSelector = &metav1.LabelSelector{
+			MatchLabels: req.Extensions.WorkerSelector,
+		}
+	}
+	return tmpl, nil
 }
 
 // snapshotsLocation joins the configured base with the team namespace so each

@@ -85,6 +85,12 @@ const (
 	ExtensionHeaderVolumeAccessMode             = ExtensionHeaderPrefix + "volume-access-mode"
 	ExtensionHeaderVolumeWaitSuccessSeconds     = ExtensionHeaderPrefix + "volume-wait-success-seconds"
 	ExtensionHeaderReservePausedSandboxDuration = ExtensionHeaderPrefix + "reserve-paused-sandbox-duration"
+	// Template build extensions. The E2B build protocol carries no metadata map,
+	// and the SDK's Template.build forwards only headers, so backend settings
+	// that the protocol cannot express travel as headers.
+	ExtensionHeaderTemplateWorkerSelector    = ExtensionHeaderPrefix + "template-worker-selector"
+	ExtensionHeaderTemplateContainerName     = ExtensionHeaderPrefix + "template-container-name"
+	ExtensionHeaderTemplateSnapshotsLocation = ExtensionHeaderPrefix + "template-snapshots-location"
 )
 
 const sandboxGenerateNameValidationSuffix = "abcde"
@@ -452,6 +458,59 @@ func (s *NewSnapshotRequest) ParseExtensions(headers http.Header) error {
 		s.Extensions.WaitSuccessSeconds = seconds
 	}
 	return nil
+}
+
+// ParseExtensions parses template-build headers into Extensions. Each header is
+// optional; an absent header leaves the backend default in place.
+func (t *TemplateBuildStart) ParseExtensions(headers http.Header) error {
+	if raw := strings.TrimSpace(headers.Get(ExtensionHeaderTemplateWorkerSelector)); raw != "" {
+		selector, err := parseLabelSelectorHeader(raw)
+		if err != nil {
+			return fmt.Errorf("invalid %s: %w", ExtensionHeaderTemplateWorkerSelector, err)
+		}
+		t.Extensions.WorkerSelector = selector
+	}
+	if name := strings.TrimSpace(headers.Get(ExtensionHeaderTemplateContainerName)); name != "" {
+		if errs := apivalidation.NameIsDNSLabel(name, false); len(errs) > 0 {
+			return fmt.Errorf("invalid %s [%s]: %s",
+				ExtensionHeaderTemplateContainerName, name, strings.Join(errs, ", "))
+		}
+		t.Extensions.ContainerName = name
+	}
+	if location := strings.TrimSpace(headers.Get(ExtensionHeaderTemplateSnapshotsLocation)); location != "" {
+		t.Extensions.SnapshotsLocation = location
+	}
+	return nil
+}
+
+// parseLabelSelectorHeader turns a "key=value,key2=value2" header into label
+// match pairs, validating both halves as Kubernetes labels so an unusable
+// selector fails at the API boundary instead of on the CRD write.
+func parseLabelSelectorHeader(raw string) (map[string]string, error) {
+	selector := make(map[string]string)
+	for _, pair := range strings.Split(raw, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		key, value, found := strings.Cut(pair, "=")
+		if !found {
+			return nil, fmt.Errorf("expected key=value pairs, got %q", pair)
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if errs := validation.IsQualifiedName(key); len(errs) > 0 {
+			return nil, fmt.Errorf("invalid label name %q: %s", key, strings.Join(errs, ", "))
+		}
+		if errs := validation.IsValidLabelValue(value); len(errs) > 0 {
+			return nil, fmt.Errorf("invalid label value %q: %s", value, strings.Join(errs, ", "))
+		}
+		selector[key] = value
+	}
+	if len(selector) == 0 {
+		return nil, fmt.Errorf("no label pairs found")
+	}
+	return selector, nil
 }
 
 // ParseExtensions parses volume-related headers into Extensions.
