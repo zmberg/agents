@@ -25,8 +25,10 @@ import (
 	"github.com/openkruise/agents/pkg/utils/timeout"
 )
 
-// Sandbox phases reported to the E2B API. They mirror the actor statuses that
-// callers can observe; transient substrate statuses collapse onto these.
+// Internal sandbox phases. They mirror the actor statuses this backend acts on,
+// collapsing the transient substrate statuses onto a serving destination. This
+// vocabulary is finer than the one the sandbox API defines, so Sandbox.GetState
+// narrows it before a caller outside this package sees it.
 const (
 	PhaseRunning   = "running"
 	PhasePaused    = "paused"

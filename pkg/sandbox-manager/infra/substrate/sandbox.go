@@ -255,7 +255,36 @@ func (s *Sandbox) GetIP() string        { return s.meta.Route.IP }
 func (s *Sandbox) Phase() string        { return s.meta.Phase }
 func (s *Sandbox) GetTemplate() string  { return s.meta.ActorTemplateName }
 
-func (s *Sandbox) GetState() (string, string) { return s.meta.Phase, "" }
+// GetState reports the phase as one of the states the sandbox API defines.
+//
+// The internal phases are finer than that vocabulary: substrate distinguishes
+// suspending from pausing, and reports a transient resuming status. Callers
+// filter on the API states, so a phase outside that set makes a sandbox
+// unreachable and unlistable however healthy it is.
+//
+// No reason accompanies the state: substrate reports a status, not the diagnostic
+// message a Sandbox condition would carry.
+func (s *Sandbox) GetState() (string, string) { return apiState(s.meta.Phase), "" }
+
+// apiState maps an internal phase onto the sandbox API vocabulary.
+func apiState(phase string) string {
+	switch phase {
+	case PhaseSuspended:
+		// Whether hibernation kept the worker or released it is a substrate
+		// concern; a caller of the sandbox API only sees that it is paused.
+		return agentsv1alpha1.SandboxStatePaused
+	case PhaseResuming:
+		// A resuming actor is on its way back to serving and is not yet
+		// reachable, which is what creating conveys.
+		return agentsv1alpha1.SandboxStateCreating
+	case PhaseCrashed:
+		return agentsv1alpha1.SandboxStateDead
+	default:
+		// PhaseRunning and PhasePaused already are API states, and an empty
+		// phase stays empty so a caller can tell it apart from a real state.
+		return phase
+	}
+}
 
 func (s *Sandbox) GetRoute() (sandboxroute.Route, error) { return s.meta.Route, nil }
 

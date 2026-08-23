@@ -164,6 +164,69 @@ func TestNewSandboxCarriesTheAnnotationsAListNeeds(t *testing.T) {
 	}
 }
 
+// A caller filters on the states the sandbox API defines, so a phase outside that
+// vocabulary makes a sandbox unreachable and unlistable however healthy it is.
+func TestSandboxGetStateSpeaksTheAPIVocabulary(t *testing.T) {
+	apiStates := []string{
+		agentsv1alpha1.SandboxStateCreating,
+		agentsv1alpha1.SandboxStateAvailable,
+		agentsv1alpha1.SandboxStateRunning,
+		agentsv1alpha1.SandboxStatePaused,
+		agentsv1alpha1.SandboxStateDead,
+	}
+
+	tests := []struct {
+		name  string
+		phase string
+		want  string
+	}{
+		{name: "running passes through", phase: PhaseRunning, want: agentsv1alpha1.SandboxStateRunning},
+		{name: "paused passes through", phase: PhasePaused, want: agentsv1alpha1.SandboxStatePaused},
+		{
+			// Hibernating by releasing the worker is a substrate concern; the
+			// caller only sees that the sandbox is paused.
+			name:  "suspended reads as paused",
+			phase: PhaseSuspended,
+			want:  agentsv1alpha1.SandboxStatePaused,
+		},
+		{
+			// Not yet reachable, which is what creating conveys.
+			name:  "resuming reads as creating",
+			phase: PhaseResuming,
+			want:  agentsv1alpha1.SandboxStateCreating,
+		},
+		{name: "crashed reads as dead", phase: PhaseCrashed, want: agentsv1alpha1.SandboxStateDead},
+		{
+			// An unknown phase must stay distinguishable from a real state rather
+			// than be reported as some healthy one.
+			name:  "an absent phase stays absent",
+			phase: "",
+			want:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sbx := NewSandbox(&Metadata{
+				SandboxID: "team-a--abcd1234",
+				Namespace: "team-a",
+				Phase:     tt.phase,
+			}, nil, nil, nil)
+
+			state, reason := sbx.GetState()
+			assert.Equal(t, tt.want, state)
+			assert.Empty(t, reason, "substrate reports a status, not a diagnostic message")
+
+			if tt.phase != "" {
+				assert.Contains(t, apiStates, state,
+					"a state outside the API vocabulary is filtered out everywhere")
+			}
+			// The internal phase stays available for backend decisions.
+			assert.Equal(t, tt.phase, sbx.Phase())
+		})
+	}
+}
+
 func TestNextRouteResourceVersion(t *testing.T) {
 	tests := []struct {
 		name    string
