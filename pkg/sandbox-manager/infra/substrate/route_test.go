@@ -18,11 +18,13 @@ package substrate
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/sandboxroute"
 )
 
@@ -123,6 +125,43 @@ func TestClearRouteEndpointSupersedesTheStoredRoute(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, persisted.Route.IP)
 	assert.Equal(t, "4", persisted.Route.ResourceVersion)
+}
+
+// The listing paginator drops any sandbox whose claim-time annotation is empty,
+// so a record without one is invisible to a list no matter how it is filtered.
+// This backend has no Sandbox object to carry the annotation, so it has to
+// project one.
+func TestNewSandboxCarriesTheAnnotationsAListNeeds(t *testing.T) {
+	claimedAt := time.Date(2026, 8, 21, 10, 30, 0, 0, time.UTC)
+
+	tests := []struct {
+		name      string
+		owner     string
+		wantOwner string
+	}{
+		{name: "a claimed sandbox reports its owner", owner: "alice", wantOwner: "alice"},
+		{
+			// Substrate stores no owner, so a recovered record has none. It must
+			// still carry a claim time or it could never be listed.
+			name: "a recovered sandbox reports no owner but still a claim time",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sbx := NewSandbox(&Metadata{
+				SandboxID:  "team-a--abcd1234",
+				ActorID:    "abcd1234-uid",
+				Namespace:  "team-a",
+				Owner:      tt.owner,
+				CreateTime: claimedAt,
+			}, nil, nil, nil)
+
+			annotations := sbx.GetAnnotations()
+			assert.Equal(t, tt.wantOwner, annotations[agentsv1alpha1.AnnotationOwner])
+			assert.Equal(t, "2026-08-21T10:30:00Z", annotations[agentsv1alpha1.AnnotationClaimTime])
+		})
+	}
 }
 
 func TestNextRouteResourceVersion(t *testing.T) {

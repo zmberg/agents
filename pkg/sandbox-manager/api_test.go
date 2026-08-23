@@ -48,6 +48,7 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
+	"github.com/openkruise/agents/pkg/sandbox-manager/infra/substrate"
 	"github.com/openkruise/agents/pkg/sandbox-manager/quota"
 	quotaspec "github.com/openkruise/agents/pkg/sandbox-manager/quota/spec"
 	"github.com/openkruise/agents/pkg/sandboxid"
@@ -822,6 +823,127 @@ func TestSandboxManager_GetSandbox(t *testing.T) {
 					t.Errorf("Expected pod state %s, got %s(%s)", tt.expectedState, state, reason)
 				}
 			}
+		})
+	}
+}
+
+// Ownership normally decides access. An empty owner is ambiguous: a pooled
+// sandbox the SandboxSet still holds has none and must stay out of reach, while
+// one already handed out whose backend could not persist the owner has to remain
+// reachable or it strands the worker it holds.
+func TestMayOperate(t *testing.T) {
+	const (
+		owner = "11111111-1111-1111-1111-111111111111"
+		other = "22222222-2222-2222-2222-222222222222"
+	)
+	// The substrate backend is what produces owner-less handed-out records, so use
+	// its real Sandbox rather than a stand-in that could drift from it.
+	sandbox := func(recordedOwner, namespace string) infra.Sandbox {
+		return substrate.NewSandbox(&substrate.Metadata{
+			SandboxID: namespace + "--abcd1234",
+			ActorID:   "abcd1234-uid",
+			Namespace: namespace,
+			Owner:     recordedOwner,
+		}, nil, nil, nil)
+	}
+
+	tests := []struct {
+		name            string
+		owner           string
+		state           string
+		user            string
+		callerNamespace string
+		wantAllowed     bool
+	}{
+		{
+			name:            "the owner may act on its own sandbox",
+			owner:           owner,
+			state:           agentsv1alpha1.SandboxStateRunning,
+			user:            owner,
+			callerNamespace: "team-a",
+			wantAllowed:     true,
+		},
+		{
+			// An owned sandbox stays per-user even inside the same namespace.
+			name:            "another user may not act on an owned sandbox",
+			owner:           owner,
+			state:           agentsv1alpha1.SandboxStateRunning,
+			user:            other,
+			callerNamespace: "team-a",
+			wantAllowed:     false,
+		},
+		{
+			// Reaching into the free pool would let a user operate a sandbox that
+			// was never handed to them.
+			name:            "nobody may act on an available pooled sandbox",
+			state:           agentsv1alpha1.SandboxStateAvailable,
+			user:            owner,
+			callerNamespace: "team-a",
+			wantAllowed:     false,
+		},
+		{
+			name:            "nobody may act on a sandbox still being created",
+			state:           agentsv1alpha1.SandboxStateCreating,
+			user:            owner,
+			callerNamespace: "team-a",
+			wantAllowed:     false,
+		},
+		{
+			// Not even a cluster-scoped caller, which the namespace fallback would
+			// otherwise wave through.
+			name:            "a cluster-scoped caller may not act on a pooled sandbox either",
+			state:           agentsv1alpha1.SandboxStateAvailable,
+			user:            owner,
+			callerNamespace: "",
+			wantAllowed:     false,
+		},
+		{
+			name:            "an owner-less running sandbox is reachable inside its namespace",
+			state:           agentsv1alpha1.SandboxStateRunning,
+			user:            other,
+			callerNamespace: "team-a",
+			wantAllowed:     true,
+		},
+		{
+			// A hibernated sandbox still holds state worth reclaiming.
+			name:            "an owner-less paused sandbox is reachable too",
+			state:           agentsv1alpha1.SandboxStatePaused,
+			user:            other,
+			callerNamespace: "team-a",
+			wantAllowed:     true,
+		},
+		{
+			// The fallback must not cross the namespace boundary.
+			name:            "an owner-less sandbox stays hidden from another namespace",
+			state:           agentsv1alpha1.SandboxStateRunning,
+			user:            other,
+			callerNamespace: "team-b",
+			wantAllowed:     false,
+		},
+		{
+			// A caller scoped to no namespace is cluster-scoped.
+			name:            "a cluster-scoped caller reaches an owner-less sandbox anywhere",
+			state:           agentsv1alpha1.SandboxStateRunning,
+			user:            other,
+			callerNamespace: "",
+			wantAllowed:     true,
+		},
+		{
+			// Being cluster-scoped does not make a caller the owner.
+			name:            "a cluster-scoped caller still may not act on an owned sandbox",
+			owner:           owner,
+			state:           agentsv1alpha1.SandboxStateRunning,
+			user:            other,
+			callerNamespace: "",
+			wantAllowed:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sbx := sandbox(tt.owner, "team-a")
+			assert.Equal(t, tt.wantAllowed,
+				mayOperate(sbx, tt.state, tt.user, tt.callerNamespace))
 		})
 	}
 }

@@ -242,7 +242,7 @@ func (m *SandboxManager) GetSandbox(ctx context.Context, user string, expectedSt
 
 	state, reason := sbx.GetState()
 
-	if sbx.GetAnnotations()[v1alpha1.AnnotationOwner] != user {
+	if !mayOperate(sbx, state, user, opts.Namespace) {
 		log.Error(nil, "sandbox is not owned by user")
 		return nil, managererrors.NewError(managererrors.ErrorNotAllowed, "sandbox %s is not owned", opts.SandboxID)
 	}
@@ -255,6 +255,38 @@ func (m *SandboxManager) GetSandbox(ctx context.Context, user string, expectedSt
 	}
 	log.Error(nil, "sandbox state is not expected", "state", state, "reason", reason, "expectedStates", expectedStates)
 	return nil, managererrors.NewError(managererrors.ErrorBadRequest, "sandbox %s is not healthy (state %s, reason %s)", opts.SandboxID, state, reason)
+}
+
+// mayOperate reports whether user may act on sbx, which is in the given state,
+// for a caller scoped to callerNamespace.
+//
+// A sandbox that records an owner belongs to that owner alone. An empty owner is
+// ambiguous, and the state is what disambiguates it:
+//
+//   - creating or available: a pooled sandbox the SandboxSet still holds. No
+//     caller may act on it, or a user could reach into the free pool and operate
+//     a sandbox never handed to them.
+//   - anything else: a sandbox already handed out whose backend could not persist
+//     the owner. The substrate backend rebuilds its records from actors after a
+//     restart and substrate stores no owner, so rejecting these would leave them
+//     unreachable forever with the workers they hold never released. The
+//     namespace stands in as the boundary, matching how the API layer authorizes
+//     the same sandboxes.
+//
+// A caller scoped to no namespace is cluster-scoped and is not narrowed by the
+// namespace fallback, but is still not the owner of someone else's sandbox.
+func mayOperate(sbx infra.Sandbox, state, user, callerNamespace string) bool {
+	if owner := sbx.GetAnnotations()[v1alpha1.AnnotationOwner]; owner != "" {
+		return owner == user
+	}
+	switch state {
+	case v1alpha1.SandboxStateCreating, v1alpha1.SandboxStateAvailable:
+		return false
+	}
+	if callerNamespace == "" {
+		return true
+	}
+	return sbx.GetNamespace() == callerNamespace
 }
 
 func (m *SandboxManager) ListSandboxes(ctx context.Context, opts infra.SelectSandboxesOptions, p *pagination.Paginator[infra.Sandbox]) ([]infra.Sandbox, string, error) {

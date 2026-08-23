@@ -77,6 +77,13 @@ func NewSandbox(meta *Metadata, control ateapipb.ControlClient, store MetadataSt
 			},
 			Annotations: map[string]string{
 				agentsv1alpha1.AnnotationOwner: meta.Owner,
+				// The listing paginator sorts on the claim time and drops any
+				// sandbox that does not carry one, so a record without it is
+				// invisible to a list however well it is otherwise formed. This
+				// backend has no Sandbox object to read the annotation from, so the
+				// metadata's creation time stands in for it: an actor is claimed at
+				// the moment it is created.
+				agentsv1alpha1.AnnotationClaimTime: meta.CreateTime.UTC().Format(time.RFC3339),
 			},
 		},
 		meta:       meta,
