@@ -125,7 +125,7 @@ func (sc *Controller) CheckApiKey(ctx context.Context, r *http.Request) (context
 	}
 	if sandboxID := r.PathValue("sandboxID"); sandboxID != "" {
 		middleWareLog = middleWareLog.WithValues("sandboxID", sandboxID)
-		owner, ok := sc.manager.GetOwnerOfSandbox(sandboxID)
+		owner, sandboxNamespace, ok := sc.manager.GetSandboxOwnership(sandboxID)
 		if !ok {
 			middleWareLog.V(utils.DebugLogLevel).Info("failed to get owner of sandbox")
 			return ctx, &web.ApiError{
@@ -136,8 +136,9 @@ func (sc *Controller) CheckApiKey(ctx context.Context, r *http.Request) (context
 		// An ownership mismatch returns the same not-found response as a missing route so
 		// authenticated callers cannot probe which sandbox IDs exist. That makes this log
 		// the only signal separating a denial from a genuine miss.
-		if owner != user.ID.String() {
-			middleWareLog.Info("sandbox owner mismatch", "owner", owner, "user", user.ID.String())
+		if !sc.mayAccessSandbox(user, owner, sandboxNamespace) {
+			middleWareLog.Info("sandbox owner mismatch",
+				"owner", owner, "user", user.ID.String(), "sandboxNamespace", sandboxNamespace)
 			return ctx, &web.ApiError{
 				Code:    http.StatusNotFound,
 				Message: fmt.Sprintf("Sandbox route not found, maybe it is crashed or killed: %s", sandboxID),
@@ -171,6 +172,28 @@ func (sc *Controller) CheckApiKey(ctx context.Context, r *http.Request) (context
 	ctx = klog.NewContext(ctx, logger.WithValues("user", user.Name))
 	ctx = context.WithValue(ctx, "user", user)
 	return ctx, nil
+}
+
+// mayAccessSandbox reports whether user may act on a sandbox whose route records
+// the given owner and namespace.
+//
+// Ownership is the normal rule. It cannot decide a recovered sandbox, though:
+// Substrate stores no owner for an actor, so a record rebuilt after a restart has
+// an empty one and would otherwise be permanently unreachable, leaving its worker
+// occupied with no way to release it. For that case the team namespace stands in
+// as the boundary, which is deliberately weaker than per-user ownership: any key
+// of the owning team may act on an unowned sandbox in its own namespace. The
+// admin team is cluster-scoped and resolves to no namespace, so it is not
+// narrowed by this rule.
+func (sc *Controller) mayAccessSandbox(user *models.CreatedTeamAPIKey, owner, sandboxNamespace string) bool {
+	if owner != "" {
+		return owner == user.ID.String()
+	}
+	callerNamespace := sc.getNamespaceOfUser(user)
+	if callerNamespace == "" {
+		return true
+	}
+	return sandboxNamespace == callerNamespace
 }
 
 const (

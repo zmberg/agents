@@ -130,11 +130,19 @@ func (s *InMemoryMetadataStore) List(opts ListOptions) []*Metadata {
 	defer s.mu.RUnlock()
 	result := make([]*Metadata, 0, len(s.store))
 	for _, meta := range s.store {
-		if opts.Owner != "" && meta.Owner != opts.Owner {
-			continue
-		}
 		if opts.Namespace != "" && meta.Namespace != opts.Namespace {
 			continue
+		}
+		// A recovered record carries no owner, because Substrate stores none for an
+		// actor. An owner-scoped query would therefore hide it forever and its
+		// worker could never be reclaimed. The namespace is the team boundary, so
+		// an unowned record answers a query already scoped to its namespace; an
+		// unscoped query still must not surface it across teams.
+		unowned := meta.Owner == ""
+		if opts.Owner != "" && meta.Owner != opts.Owner {
+			if !unowned || opts.Namespace == "" {
+				continue
+			}
 		}
 		clone := *meta
 		result = append(result, &clone)

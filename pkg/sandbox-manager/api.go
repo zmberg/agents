@@ -292,9 +292,16 @@ func (m *SandboxManager) DeleteCheckpoint(ctx context.Context, user string, opts
 	return nil
 }
 
-func (m *SandboxManager) GetOwnerOfSandbox(sandboxID string) (string, bool) {
+// GetSandboxOwnership returns the owner and namespace recorded on a sandbox's
+// route, reporting false when no route exists.
+//
+// It returns both because the owner alone cannot authorize a recovered sandbox:
+// Substrate stores no owner for an actor, so a record rebuilt at startup has an
+// empty one and the caller has to fall back to the namespace. Deciding what to do
+// with that is the API layer's business, so this only reports what the route says.
+func (m *SandboxManager) GetSandboxOwnership(sandboxID string) (owner, namespace string, found bool) {
 	route, ok := m.proxy.LoadRoute(sandboxID)
-	return route.Owner, ok
+	return route.Owner, route.Namespace, ok
 }
 
 // GetOwnerOfVolume returns the owner (UserID) of the volume identified by volumeID (PV Name)

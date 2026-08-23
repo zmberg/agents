@@ -1424,13 +1424,14 @@ func parseSandboxID(sandboxID string) (string, string, bool) {
 	return namespace, name, true
 }
 
-func TestSandboxManager_GetOwnerOfSandbox(t *testing.T) {
+func TestSandboxManager_GetSandboxOwnership(t *testing.T) {
 	tests := []struct {
-		name          string
-		sandboxID     string
-		setupRoute    bool
-		expectedOwner string
-		expectedOk    bool
+		name              string
+		sandboxID         string
+		setupRoute        bool
+		expectedOwner     string
+		expectedNamespace string
+		expectedOk        bool
 	}{
 		{
 			name:          "non-existent sandbox returns empty owner and false",
@@ -1440,11 +1441,14 @@ func TestSandboxManager_GetOwnerOfSandbox(t *testing.T) {
 			expectedOk:    false,
 		},
 		{
-			name:          "existing sandbox returns owner and true",
-			sandboxID:     "default--test-sandbox",
-			setupRoute:    true,
-			expectedOwner: testUser,
-			expectedOk:    true,
+			// The namespace comes back alongside the owner because it is the team
+			// boundary an unowned sandbox has to be authorized against.
+			name:              "existing sandbox returns owner, namespace and true",
+			sandboxID:         "default--test-sandbox",
+			setupRoute:        true,
+			expectedOwner:     testUser,
+			expectedNamespace: "default",
+			expectedOk:        true,
 		},
 	}
 
@@ -1493,10 +1497,11 @@ func TestSandboxManager_GetOwnerOfSandbox(t *testing.T) {
 				})
 			}
 
-			owner, ok := manager.GetOwnerOfSandbox(tt.sandboxID)
+			owner, namespace, ok := manager.GetSandboxOwnership(tt.sandboxID)
 
 			assert.Equal(t, tt.expectedOk, ok)
 			assert.Equal(t, tt.expectedOwner, owner)
+			assert.Equal(t, tt.expectedNamespace, namespace)
 		})
 	}
 }

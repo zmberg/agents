@@ -116,6 +116,8 @@ func TestInMemoryMetadataStoreList(t *testing.T) {
 		store.Put(&Metadata{SandboxID: "a", Owner: "alice", Namespace: "team-a"})
 		store.Put(&Metadata{SandboxID: "b", Owner: "bob", Namespace: "team-a"})
 		store.Put(&Metadata{SandboxID: "c", Owner: "alice", Namespace: "team-b"})
+		// A recovered record: Substrate stores no owner for an actor.
+		store.Put(&Metadata{SandboxID: "r", Namespace: "team-a"})
 		return store
 	}
 
@@ -124,10 +126,27 @@ func TestInMemoryMetadataStoreList(t *testing.T) {
 		opts ListOptions
 		want []string
 	}{
-		{name: "zero value matches everything", opts: ListOptions{}, want: []string{"a", "b", "c"}},
-		{name: "filter by owner", opts: ListOptions{Owner: "alice"}, want: []string{"a", "c"}},
-		{name: "filter by namespace", opts: ListOptions{Namespace: "team-a"}, want: []string{"a", "b"}},
-		{name: "filters are ANDed", opts: ListOptions{Owner: "alice", Namespace: "team-a"}, want: []string{"a"}},
+		{name: "zero value matches everything", opts: ListOptions{}, want: []string{"a", "b", "c", "r"}},
+		{name: "filter by namespace", opts: ListOptions{Namespace: "team-a"}, want: []string{"a", "b", "r"}},
+		{
+			// An owner-scoped query alone must not leak an unowned record, because
+			// nothing has bounded it to a team yet.
+			name: "filter by owner hides unowned records",
+			opts: ListOptions{Owner: "alice"},
+			want: []string{"a", "c"},
+		},
+		{
+			// Once scoped to a namespace, an unowned record answers: the namespace is
+			// the team boundary, and hiding it would strand its worker.
+			name: "an owner and namespace query also returns unowned records in it",
+			opts: ListOptions{Owner: "alice", Namespace: "team-a"},
+			want: []string{"a", "r"},
+		},
+		{
+			name: "an unowned record stays out of another namespace",
+			opts: ListOptions{Owner: "alice", Namespace: "team-b"},
+			want: []string{"c"},
+		},
 		{name: "no match yields empty", opts: ListOptions{Owner: "carol"}, want: nil},
 	}
 

@@ -564,6 +564,88 @@ func TestValidateTeamNamespace(t *testing.T) {
 	})
 }
 
+// --- mayAccessSandbox tests ---
+// Ownership decides a normal sandbox. A recovered one has no owner, because
+// Substrate stores none, so the team namespace stands in as a weaker boundary.
+func TestMayAccessSandbox(t *testing.T) {
+	controller, _, teardown := Setup(t)
+	defer teardown()
+
+	const (
+		ownerID = "11111111-1111-1111-1111-111111111111"
+		otherID = "22222222-2222-2222-2222-222222222222"
+	)
+	teamUser := func(id, team string) *models.CreatedTeamAPIKey {
+		return &models.CreatedTeamAPIKey{
+			ID:   uuid.MustParse(id),
+			Team: &models.Team{Name: team},
+		}
+	}
+
+	tests := []struct {
+		name             string
+		user             *models.CreatedTeamAPIKey
+		owner            string
+		sandboxNamespace string
+		wantAllowed      bool
+	}{
+		{
+			name:             "owner may act on its own sandbox",
+			user:             teamUser(ownerID, "team-a"),
+			owner:            ownerID,
+			sandboxNamespace: "team-a",
+			wantAllowed:      true,
+		},
+		{
+			// An owned sandbox stays per-user even inside the same team.
+			name:             "a teammate may not act on an owned sandbox",
+			user:             teamUser(otherID, "team-a"),
+			owner:            ownerID,
+			sandboxNamespace: "team-a",
+			wantAllowed:      false,
+		},
+		{
+			name:             "an unowned sandbox is reachable inside its own team",
+			user:             teamUser(otherID, "team-a"),
+			owner:            "",
+			sandboxNamespace: "team-a",
+			wantAllowed:      true,
+		},
+		{
+			// The relaxation must not cross the team boundary.
+			name:             "an unowned sandbox stays hidden from another team",
+			user:             teamUser(otherID, "team-b"),
+			owner:            "",
+			sandboxNamespace: "team-a",
+			wantAllowed:      false,
+		},
+		{
+			// Admin is cluster-scoped, so it resolves to no namespace and is not
+			// narrowed by the namespace fallback.
+			name:             "admin may act on an unowned sandbox in any namespace",
+			user:             teamUser(otherID, models.AdminTeamName),
+			owner:            "",
+			sandboxNamespace: "team-a",
+			wantAllowed:      true,
+		},
+		{
+			// Admin is still not the owner of someone else's sandbox.
+			name:             "admin may not act on another user's owned sandbox",
+			user:             teamUser(otherID, models.AdminTeamName),
+			owner:            ownerID,
+			sandboxNamespace: "team-a",
+			wantAllowed:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.wantAllowed,
+				controller.mayAccessSandbox(tt.user, tt.owner, tt.sandboxNamespace))
+		})
+	}
+}
+
 func TestCheckApiKey_VolumeOwnership(t *testing.T) {
 	controller, fc, teardown := Setup(t)
 	defer teardown()
