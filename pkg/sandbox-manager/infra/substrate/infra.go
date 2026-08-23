@@ -107,9 +107,10 @@ func (i *Infra) Run(ctx context.Context) error {
 		}
 		i.store.Put(meta)
 		recovered++
-		if meta.Route.IP != "" {
-			i.routes.publish(NewSandbox(meta, i.control, i.store, i.locks))
-		}
+		// Publish even for a hibernated actor, which holds no address. The route is
+		// what makes the sandbox addressable, so a recovered actor without one
+		// could not be inspected, resumed, or deleted.
+		i.routes.publish(NewSandbox(meta, i.control, i.store, i.locks))
 		log.V(1).Info("recovered substrate actor",
 			"sandboxID", meta.SandboxID, "actorID", meta.ActorID,
 			"atespace", meta.Atespace, "phase", meta.Phase)
@@ -344,10 +345,12 @@ func (i *Infra) ClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions
 	meta.Route = routeFromActorID(sandboxID, opts.Namespace, opts.User, actorID, actor)
 	i.store.Put(meta)
 
-	// Publish the route so the gateway can reach the freshly running actor.
-	if meta.Route.IP != "" {
-		i.routes.publish(sbx)
-	}
+	// Publish the route unconditionally. It is not only the gateway's forwarding
+	// entry but the record that makes the sandbox addressable at all, which the
+	// API layer reads to decide whether a sandbox exists and who owns it.
+	// Withholding it for an actor that has no address yet would leave the sandbox
+	// unreachable by any request, including the ones that would release it.
+	i.routes.publish(sbx)
 
 	return sbx, metrics, nil
 }

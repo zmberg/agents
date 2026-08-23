@@ -32,6 +32,7 @@ import (
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
+	"github.com/openkruise/agents/pkg/sandboxroute"
 )
 
 // fakeControl is a scriptable ateapipb.ControlClient. Only the methods the
@@ -406,8 +407,10 @@ func TestInfraRunRecoversActors(t *testing.T) {
 		})
 	}
 
-	// Suspended actors hold no worker but must still be listable and deletable.
-	t.Run("a suspended actor is recovered without a route", func(t *testing.T) {
+	// A hibernated actor holds no worker and no address, but the route is what
+	// makes it addressable, so it must still be published or the sandbox could
+	// never be inspected, resumed, or deleted.
+	t.Run("a hibernated actor is recovered and still published without an address", func(t *testing.T) {
 		control := newFakeControl()
 		control.listActors = func(*ateapipb.ListActorsRequest) (*ateapipb.ListActorsResponse, error) {
 			return &ateapipb.ListActorsResponse{Actors: []*ateapipb.Actor{
@@ -415,12 +418,27 @@ func TestInfraRunRecoversActors(t *testing.T) {
 			}}, nil
 		}
 		i := newInfraWithFake(t, control)
+
+		var published []sandboxroute.Route
+		require.NoError(t, i.routes.Subscribe(ctx, func(_ context.Context, ev infra.SandboxRouteEvent) {
+			if ev.Sandbox == nil {
+				return
+			}
+			route, err := ev.Sandbox.GetRoute()
+			require.NoError(t, err)
+			published = append(published, route)
+		}))
+
 		require.NoError(t, i.Run(ctx))
 
 		got, err := i.store.Get("team-a--ca9930ae")
 		require.NoError(t, err)
 		assert.Equal(t, PhaseSuspended, got.Phase)
 		assert.Empty(t, got.Route.IP)
+
+		require.Len(t, published, 1, "a hibernated actor must still be published")
+		assert.Equal(t, "team-a--ca9930ae", published[0].ID)
+		assert.Empty(t, published[0].IP, "the route carries identity, not an endpoint")
 	})
 
 	t.Run("every page is walked", func(t *testing.T) {
