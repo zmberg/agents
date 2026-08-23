@@ -20,16 +20,18 @@ every entry there is a trap that already cost a debugging round.
 
 ## Environment
 
-Set these once per session. The values are the current dev cluster; substitute your
-own.
+Set these once per session. They are placeholders; fill each from your own
+environment. `CLUSTER_ID` and the kubeconfig come from your cluster access, the E2B
+domain and its ALB hostname from whoever operates the endpoint, and `ATESPACE` is
+the team you hold a key for.
 
 ```bash
-export KUBECONFIG=~/Documents/asi-work/workinfo/ack.kubeconfig
-export CLUSTER_ID=c758c7c74959e45bbae15c87e74a3bd75      # ACK, cn-hongkong
+export KUBECONFIG=<path-to-kubeconfig>
+export CLUSTER_ID=<cluster-id>                             # ACK, cn-hongkong
 export NS=sandbox-system                                  # sandbox-manager
-export ATESPACE=ate-demo-msb                              # = E2B team name = k8s namespace
-export E2B_DOMAIN=e2b.sandbox.liheng.cn
-export ALB_HOST=alb-2crcgnam9aal5ufy8i.cn-hongkong.alb.aliyuncsslbintl.com
+export ATESPACE=<team>                                     # = E2B team name = k8s namespace
+export E2B_DOMAIN=<e2b-domain>
+export ALB_HOST=<alb-hostname>                             # the ALB fronting the E2B API
 export CA=<repo>/bin/e2b-doc-example/certs/ca-fullchain.pem
 ```
 

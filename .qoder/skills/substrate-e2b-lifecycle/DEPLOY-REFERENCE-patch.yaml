@@ -7,9 +7,9 @@
 #     --type=strategic --patch-file=DEPLOY-REFERENCE-patch.yaml
 #
 # A strategic merge replaces `args` wholesale rather than appending to it, so every
-# pre-existing flag is repeated below. Before applying this to a different cluster,
-# read that cluster's own list and reconcile it with this one — an omitted flag is
-# silently dropped, and a flag the image no longer accepts crashes it on startup:
+# pre-existing flag is repeated below. Fill <admin-key> first, then reconcile the
+# list against the target cluster — an omitted flag is silently dropped, and a flag
+# the image no longer accepts crashes it on startup:
 #
 #   kubectl get deploy sandbox-manager -n sandbox-system \
 #     -o jsonpath='{.spec.template.spec.containers[0].args}' | tr ',' '\n'
@@ -26,14 +26,14 @@ spec:
       containers:
         - name: controller
           args:
-            # --- flags this cluster already carried, repeated verbatim ---
+            # --- flags this cluster already carried; <admin-key> is a placeholder ---
             - -v=5
             - --zap-log-level=5
             - --system-namespace=sandbox-system
             - --peer-selector=agents.kruise.io/sandbox-manager-peer-finder=ack-sandbox-manager
             - --kube-client-qps=10000
             - --kube-client-burst=30000
-            - --e2b-admin-key=admin-sandbox-liheng-v2
+            - --e2b-admin-key=<admin-key>
             - --e2b-enable-auth=true
             - --e2b-max-timeout=3155760000
             - --e2b-key-storage=secret
