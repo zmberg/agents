@@ -128,6 +128,7 @@ func (f *fakeControl) ListActors(_ context.Context, in *ateapipb.ListActorsReque
 // assignment carries the pod IP, which is what a route is built from.
 func runningActor() *ateapipb.Actor {
 	return &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Version: 3},
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 			WorkerAssignment: &ateapipb.WorkerAssignment{
@@ -310,6 +311,7 @@ func actorIn(atespace, actorID string, state ateapipb.ActorState, workerPool, po
 		Metadata: &ateapipb.ResourceMetadata{
 			Atespace:   atespace,
 			Name:       actorID,
+			Version:    5,
 			CreateTime: timestamppb.New(time.Now().Add(-time.Hour)),
 		},
 		ActorTemplateName: "counter-b1",

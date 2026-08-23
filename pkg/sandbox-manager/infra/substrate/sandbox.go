@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -33,6 +34,11 @@ import (
 	"github.com/openkruise/agents/pkg/sandboxroute"
 	"github.com/openkruise/agents/pkg/utils/timeout"
 )
+
+// firstRouteResourceVersion is the smallest resource version the route store
+// accepts: it validates canonical positive integers, so zero and any form with a
+// leading zero are rejected.
+const firstRouteResourceVersion int64 = 1
 
 // Sandbox is one Substrate actor presented as an infra.Sandbox.
 //
@@ -342,15 +348,36 @@ func (s *Sandbox) setPhase(phase string) {
 
 // clearRouteEndpoint drops the address of a hibernated actor while keeping its
 // identity, so the gateway stops routing but the sandbox stays addressable by ID.
+//
+// The resource version is advanced because the route store ignores an upsert that
+// does not move past the version it already holds. Without that the withdrawal
+// would be dropped and the gateway would keep sending traffic to a freed worker.
 func (s *Sandbox) clearRouteEndpoint() {
+	nextVersion := nextRouteResourceVersion(s.meta.Route.ResourceVersion)
 	s.meta.Route.IP = ""
 	s.meta.Route.State = s.meta.Phase
+	s.meta.Route.ResourceVersion = nextVersion
 	if s.store != nil {
 		s.store.Update(s.meta.SandboxID, func(m *Metadata) {
 			m.Route.IP = ""
 			m.Route.State = m.Phase
+			m.Route.ResourceVersion = nextVersion
 		})
 	}
+}
+
+// nextRouteResourceVersion returns the version that supersedes current.
+//
+// Substrate does not bump the actor's version for a route-only change, so a
+// locally driven withdrawal has to advance the fence itself. An unparsable or
+// absent current version restarts at the first valid one rather than failing,
+// which keeps a malformed record from permanently pinning the route.
+func nextRouteResourceVersion(current string) string {
+	version, err := strconv.ParseInt(current, 10, 64)
+	if err != nil || version < firstRouteResourceVersion {
+		return strconv.FormatInt(firstRouteResourceVersion, 10)
+	}
+	return strconv.FormatInt(version+1, 10)
 }
 
 // forget removes every trace of a deleted actor.
@@ -369,17 +396,38 @@ func routeFromActor(meta *Metadata, actor *ateapipb.Actor) sandboxroute.Route {
 // callers that have not yet assembled a Metadata record.
 func routeFromActorID(sandboxID, namespace, owner, actorID string, actor *ateapipb.Actor) sandboxroute.Route {
 	route := sandboxroute.Route{
-		ID:        sandboxID,
-		Namespace: namespace,
-		Name:      sandboxID,
-		UID:       types.UID(actorID),
-		Owner:     owner,
+		ID:              sandboxID,
+		Namespace:       namespace,
+		Name:            sandboxID,
+		UID:             types.UID(actorID),
+		Owner:           owner,
+		ResourceVersion: routeResourceVersion(actor),
 	}
 	if actor != nil {
 		route.IP = actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp()
 		route.State = phaseOf(actor.GetStatus())
 	}
 	return route
+}
+
+// routeResourceVersion projects an actor's version onto the resource version a
+// route is fenced by.
+//
+// The route store rejects a route whose resource version is absent or not a
+// canonical positive integer, and it ignores one that does not advance past the
+// version already recorded for the same object. An actor's metadata version is
+// monotonic per actor, which is exactly that contract, so it is reused directly.
+//
+// A version below the first valid value is raised to it rather than left empty:
+// substrate reports zero for an actor it has not versioned yet, and an empty
+// resource version would make the route invalid and drop the sandbox from the
+// gateway entirely.
+func routeResourceVersion(actor *ateapipb.Actor) string {
+	version := actor.GetMetadata().GetVersion()
+	if version < firstRouteResourceVersion {
+		version = firstRouteResourceVersion
+	}
+	return strconv.FormatInt(version, 10)
 }
 
 // phaseOf collapses an actor status onto the phase reported to E2B. Transient
