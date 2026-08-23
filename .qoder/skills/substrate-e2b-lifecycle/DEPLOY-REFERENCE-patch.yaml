@@ -1,0 +1,85 @@
+# Strategic-merge patch for the sandbox-manager Deployment.
+#
+# Adds the Substrate backend flags, the control-plane CA mount, and the projected
+# ServiceAccount token the control plane authenticates with.
+#
+#   kubectl patch deploy sandbox-manager -n sandbox-system \
+#     --type=strategic --patch-file=DEPLOY-REFERENCE-patch.yaml
+#
+# A strategic merge replaces `args` wholesale rather than appending to it, so every
+# pre-existing flag is repeated below. Before applying this to a different cluster,
+# read that cluster's own list and reconcile it with this one — an omitted flag is
+# silently dropped, and a flag the image no longer accepts crashes it on startup:
+#
+#   kubectl get deploy sandbox-manager -n sandbox-system \
+#     -o jsonpath='{.spec.template.spec.containers[0].args}' | tr ',' '\n'
+#
+# The substrate-ca Secret must exist first; see DEPLOY-REFERENCE.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sandbox-manager
+  namespace: sandbox-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: controller
+          args:
+            # --- flags this cluster already carried, repeated verbatim ---
+            - -v=5
+            - --zap-log-level=5
+            - --system-namespace=sandbox-system
+            - --peer-selector=agents.kruise.io/sandbox-manager-peer-finder=ack-sandbox-manager
+            - --kube-client-qps=10000
+            - --kube-client-burst=30000
+            - --e2b-admin-key=admin-sandbox-liheng-v2
+            - --e2b-enable-auth=true
+            - --e2b-max-timeout=3155760000
+            - --e2b-key-storage=secret
+            - --e2b-key-storage-disable-schema-auto-update
+            - --quota-redis-addr=
+            - --quota-redis-db=0
+            - --max-claim-workers=100
+            - --max-create-qps=200
+            - --ext-proc-max-concurrency=3000
+            # --- Substrate backend ---
+            # Setting this selects the Substrate backend; absent selects the CR
+            # backend. The address must be the DNS name on the serving certificate's
+            # SAN, since that is also the TLS ServerName.
+            - --substrate-addr=api.ate-system.svc:443
+            - --substrate-ca-file=/etc/substrate/ca.crt
+            # The control plane authenticates every RPC by Kubernetes ServiceAccount
+            # JWT: ConfigMap ate-api-authentication in ate-system pins issuer
+            # https://kubernetes.default.svc and audience api.ate-system.svc. An
+            # unauthenticated call is rejected before any handler records it, so the
+            # failure reads as though the request never arrived.
+            - --substrate-token-file=/var/run/secrets/substrate/token
+            # Snapshot bucket, which must already exist and match the SandboxConfig.
+            - --substrate-snapshots-location=local://msb-snapshots
+            # Must match the WorkerPool's sandboxClass.
+            - --substrate-sandbox-class=microsandbox
+            # suspend snapshots the actor and frees its worker; pause keeps the
+            # worker held.
+            - --substrate-hibernate-mode=suspend
+          volumeMounts:
+            - name: substrate-ca
+              mountPath: /etc/substrate
+              readOnly: true
+            - name: substrate-token
+              mountPath: /var/run/secrets/substrate
+              readOnly: true
+      volumes:
+        - name: substrate-ca
+          secret:
+            secretName: substrate-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+        - name: substrate-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: api.ate-system.svc
+                  expirationSeconds: 3600
