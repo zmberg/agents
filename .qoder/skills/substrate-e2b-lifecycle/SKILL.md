@@ -57,6 +57,24 @@ for v in json.load(sys.stdin).get('data',{}).values():
 ")
 ```
 
+## Images
+
+The controller image is built out of band and tagged
+`<branch>_<7-char-sha>_<yyyymmddHHMM>`, so the tag names the commit it came from.
+The `<image>` that Deploy step 2 sets is one of these, from your own registry.
+
+Read the image a cluster currently runs rather than assuming one:
+
+```bash
+kubectl get deploy sandbox-manager -n $NS \
+  -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+```
+
+This runbook was verified end to end on commit `21769a9b` — the full lifecycle,
+build through kill, passed against the image built from it. A later image only
+needs re-verifying if it touches the substrate backend, the route source, or the
+E2B handlers.
+
 ## Deploy
 
 Apply in this order. Each step states what proves it landed.
